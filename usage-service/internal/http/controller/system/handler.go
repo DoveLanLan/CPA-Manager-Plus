@@ -38,7 +38,7 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusInternalServerError, err)
 		return
 	}
-	status := h.App.Collector.Status()
+	status := h.App.CollectorService.Status()
 	status.DeadLetters = deadLetters
 	response.JSON(w, http.StatusOK, map[string]any{
 		"service":     h.App.ServiceID,

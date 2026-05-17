@@ -6,6 +6,7 @@ import (
 	"github.com/seakee/cpa-manager/usage-service/internal/collector"
 	"github.com/seakee/cpa-manager/usage-service/internal/config"
 	apikeyaliassvc "github.com/seakee/cpa-manager/usage-service/internal/service/apikeyalias"
+	collectorsvc "github.com/seakee/cpa-manager/usage-service/internal/service/collector"
 	managerconfigsvc "github.com/seakee/cpa-manager/usage-service/internal/service/managerconfig"
 	modelpricesvc "github.com/seakee/cpa-manager/usage-service/internal/service/modelprice"
 	panelsvc "github.com/seakee/cpa-manager/usage-service/internal/service/panel"
@@ -25,6 +26,7 @@ type Context struct {
 
 	SetupService         *setupsvc.Service
 	ManagerConfigService *managerconfigsvc.Service
+	CollectorService     *collectorsvc.Service
 	UsageService         *usagesvc.Service
 	ModelPriceService    *modelpricesvc.Service
 	APIKeyAliasService   *apikeyaliassvc.Service
@@ -41,15 +43,17 @@ func FromExisting(
 	modelPriceSyncURL *string,
 	serviceID string,
 ) *Context {
-	managerConfigService := managerconfigsvc.New(cfg, st, collectorManager)
+	collectorService := collectorsvc.New(collectorManager)
+	managerConfigService := managerconfigsvc.New(cfg, st, collectorService)
 	return &Context{
 		Config:               cfg,
 		Store:                st,
 		Collector:            collectorManager,
 		StartedAt:            startedAt,
 		ServiceID:            serviceID,
-		SetupService:         setupsvc.New(cfg, st, collectorManager, managerConfigService, startedAt, serviceID),
+		SetupService:         setupsvc.New(cfg, st, collectorService, managerConfigService, startedAt, serviceID),
 		ManagerConfigService: managerConfigService,
+		CollectorService:     collectorService,
 		UsageService:         usagesvc.New(st),
 		ModelPriceService:    modelpricesvc.New(st, modelPriceSyncURL),
 		APIKeyAliasService:   apikeyaliassvc.New(st),

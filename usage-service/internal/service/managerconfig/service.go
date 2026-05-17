@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seakee/cpa-manager/usage-service/internal/collector"
 	"github.com/seakee/cpa-manager/usage-service/internal/config"
+	collectorservice "github.com/seakee/cpa-manager/usage-service/internal/service/collector"
 	"github.com/seakee/cpa-manager/usage-service/internal/service/cpa"
 	"github.com/seakee/cpa-manager/usage-service/internal/store"
 )
@@ -29,10 +29,10 @@ type Response struct {
 type Service struct {
 	cfg       config.Config
 	store     *store.Store
-	collector *collector.Manager
+	collector *collectorservice.Service
 }
 
-func New(cfg config.Config, store *store.Store, collector *collector.Manager) *Service {
+func New(cfg config.Config, store *store.Store, collector *collectorservice.Service) *Service {
 	return &Service{
 		cfg:       cfg,
 		store:     store,
@@ -107,7 +107,7 @@ func (s *Service) Update(ctx context.Context, submitted store.ManagerConfig) (Re
 		if err := s.store.SaveManagerConfig(ctx, next); err != nil {
 			return Response{}, err
 		}
-		s.collector.Stop()
+		_ = s.collector.Stop(context.Background())
 		return Response{
 			Config: next,
 			Source: string(SourceDB),
@@ -121,9 +121,9 @@ func (s *Service) Update(ctx context.Context, submitted store.ManagerConfig) (Re
 		return Response{}, err
 	}
 	if ManagerCollectorEnabled(next) {
-		s.collector.Start(context.Background(), RuntimeConfigFromManagerConfig(next))
+		_ = s.collector.Start(context.Background(), next)
 	} else {
-		s.collector.Stop()
+		_ = s.collector.Stop(context.Background())
 	}
 	return Response{
 		Config: next,
@@ -248,19 +248,6 @@ func SetupFromManagerConfig(cfg store.ManagerConfig) store.Setup {
 		ManagementKey:  cfg.CPAConnection.ManagementKey,
 		Queue:          cfg.Collector.Queue,
 		PopSide:        cfg.Collector.PopSide,
-	}
-}
-
-func RuntimeConfigFromManagerConfig(cfg store.ManagerConfig) collector.RuntimeConfig {
-	return collector.RuntimeConfig{
-		CPAUpstreamURL: cfg.CPAConnection.CPABaseURL,
-		ManagementKey:  cfg.CPAConnection.ManagementKey,
-		CollectorMode:  cfg.Collector.CollectorMode,
-		Queue:          cfg.Collector.Queue,
-		PopSide:        cfg.Collector.PopSide,
-		BatchSize:      cfg.Collector.BatchSize,
-		PollInterval:   time.Duration(cfg.Collector.PollIntervalMS) * time.Millisecond,
-		TLSSkipVerify:  cfg.Collector.TLSSkipVerify,
 	}
 }
 

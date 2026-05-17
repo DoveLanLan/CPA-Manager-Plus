@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seakee/cpa-manager/usage-service/internal/collector"
 	"github.com/seakee/cpa-manager/usage-service/internal/config"
+	collectorservice "github.com/seakee/cpa-manager/usage-service/internal/service/collector"
 	"github.com/seakee/cpa-manager/usage-service/internal/service/cpa"
 	"github.com/seakee/cpa-manager/usage-service/internal/service/managerconfig"
 	"github.com/seakee/cpa-manager/usage-service/internal/store"
@@ -42,13 +42,13 @@ type InfoResult struct {
 type Service struct {
 	cfg                  config.Config
 	store                *store.Store
-	collector            *collector.Manager
+	collector            *collectorservice.Service
 	managerConfigService *managerconfig.Service
 	startedAt            int64
 	serviceID            string
 }
 
-func New(cfg config.Config, store *store.Store, collector *collector.Manager, managerConfigService *managerconfig.Service, startedAt int64, serviceID string) *Service {
+func New(cfg config.Config, store *store.Store, collector *collectorservice.Service, managerConfigService *managerconfig.Service, startedAt int64, serviceID string) *Service {
 	return &Service{
 		cfg:                  cfg,
 		store:                store,
@@ -159,9 +159,9 @@ func (s *Service) Setup(ctx context.Context, req Request, authorizationHeader st
 		return Result{}, err
 	}
 	if requestMonitoringEnabled {
-		s.collector.Start(context.Background(), managerconfig.RuntimeConfigFromManagerConfig(managerCfg))
+		_ = s.collector.Start(context.Background(), managerCfg)
 	} else {
-		s.collector.Stop()
+		_ = s.collector.Stop(context.Background())
 	}
 	return Result{OK: true, Upstream: setup.CPAUpstreamURL}, nil
 }
