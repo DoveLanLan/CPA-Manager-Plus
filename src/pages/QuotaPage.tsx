@@ -79,11 +79,6 @@ export function QuotaPage() {
 
   return (
     <div className={styles.container}>
-      <div className={styles.pageHeader}>
-        <h1 className={styles.pageTitle}>{t('quota_management.title')}</h1>
-        <p className={styles.description}>{t('quota_management.description')}</p>
-      </div>
-
       {error && <div className={styles.errorBox}>{error}</div>}
 
       <div className={styles.toolbar}>

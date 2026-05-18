@@ -16,27 +16,6 @@
   );
 }
 
-.pageHeader {
-  display: flex;
-  flex-direction: column;
-  gap: $spacing-sm;
-}
-
-.pageTitle {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.description {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
 .pageMeta {
   display: flex;
   align-items: center;

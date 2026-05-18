@@ -870,12 +870,6 @@ export function ConfigPage() {
     </div>
   );
 
-  const pageDescription =
-    activeTab === 'manager'
-      ? t('config_management.manager.description')
-      : activeTab === 'visual'
-      ? t('config_management.visual.notice')
-      : t('config_management.description');
   const managerServiceTarget = resolveManagerServiceBase();
   const canConfigureRequestMonitoring = Boolean(managerServiceTarget);
   const managerRuntimeModeLabel =
@@ -885,11 +879,6 @@ export function ConfigPage() {
 
   return (
     <div className={styles.container}>
-      <div className={styles.pageHeader}>
-        <h1 className={styles.pageTitle}>{t('config_management.title')}</h1>
-        <p className={styles.description}>{pageDescription}</p>
-      </div>
-
       <div className={styles.workspaceShell}>
         <div className={styles.pageMeta}>
           <div className={styles.tabBar}>

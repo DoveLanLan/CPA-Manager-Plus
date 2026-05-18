@@ -22,16 +22,6 @@ interface ProviderStats {
   openai: number | null;
 }
 
-type TimeOfDay = 'morning' | 'afternoon' | 'evening' | 'night';
-
-function getTimeOfDay(): TimeOfDay {
-  const hour = new Date().getHours();
-  if (hour >= 5 && hour < 12) return 'morning';
-  if (hour >= 12 && hour < 17) return 'afternoon';
-  if (hour >= 17 && hour < 21) return 'evening';
-  return 'night';
-}
-
 export function DashboardPage() {
   const { t, i18n } = useTranslation();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
@@ -61,8 +51,6 @@ export function DashboardPage() {
 
   const [loading, setLoading] = useState(true);
 
-  // Time-of-day state for dynamic greeting
-  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>(getTimeOfDay);
   const [currentTime, setCurrentTime] = useState(() => new Date());
 
   const apiKeysCache = useRef<string[]>([]);
@@ -74,7 +62,6 @@ export function DashboardPage() {
   // Update time every 60 seconds
   useEffect(() => {
     const id = setInterval(() => {
-      setTimeOfDay(getTimeOfDay());
       setCurrentTime(new Date());
     }, 60_000);
     return () => clearInterval(id);
@@ -256,10 +243,6 @@ export function DashboardPage() {
         ? styles.configBadgeFillFirst
         : styles.configBadgeUnknown;
 
-  // Derived time-based values
-  const greetingKey = `dashboard.greeting_${timeOfDay}`;
-  const caringKey = `dashboard.caring_${timeOfDay}`;
-
   const formattedDate = currentTime.toLocaleDateString(i18n.language, {
     weekday: 'long',
     year: 'numeric',
@@ -274,16 +257,7 @@ export function DashboardPage() {
 
   return (
     <div className={styles.dashboard}>
-      {/* Hero welcome section */}
       <section className={styles.hero}>
-        <span className={styles.heroWatermark} aria-hidden="true">
-          OVERVIEW
-        </span>
-        <div className={styles.heroContent}>
-          <span className={styles.heroGreeting}>{t(greetingKey)}</span>
-          <h1 className={styles.heroTitle}>{t('dashboard.welcome_back')}</h1>
-          <p className={styles.heroCaring}>{t(caringKey)}</p>
-        </div>
         <div className={styles.heroMeta}>
           <div className={styles.dateTimeBlock}>
             <span className={styles.time}>{formattedTime}</span>

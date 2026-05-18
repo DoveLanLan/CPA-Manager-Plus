@@ -24,7 +24,7 @@
   z-index: 1;
   display: flex;
   align-items: flex-end;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: $spacing-lg;
   padding: $spacing-2xl $spacing-xl;
   border-radius: var(--app-radius-lg);
@@ -41,80 +41,6 @@
     align-items: flex-start;
     padding: $spacing-xl $spacing-lg;
   }
-}
-
-// Large watermark text behind hero content
-.heroWatermark {
-  position: absolute;
-  top: 50%;
-  left: $spacing-xl;
-  transform: translateY(-50%);
-  font-size: 104px;
-  font-weight: 900;
-  line-height: 1;
-  letter-spacing: 0;
-  text-transform: uppercase;
-  color: var(--text-primary);
-  opacity: 0.04;
-  white-space: nowrap;
-  pointer-events: none;
-  user-select: none;
-  animation: watermarkEnter 0.8s ease-out 0.1s both;
-
-  @media (max-width: $breakpoint-mobile) {
-    font-size: 58px;
-    left: $spacing-lg;
-  }
-}
-
-@keyframes watermarkEnter {
-  from {
-    opacity: 0;
-    transform: translateY(-50%) translateX(-20px);
-  }
-  to {
-    opacity: 0.04;
-    transform: translateY(-50%) translateX(0);
-  }
-}
-
-.heroContent {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: $spacing-xs;
-}
-
-.heroGreeting {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: uppercase;
-  color: var(--primary-color);
-  animation: fadeSlideUp 0.5s ease-out 0.1s both;
-}
-
-.heroTitle {
-  margin: 0;
-  font-size: 44px;
-  font-weight: 800;
-  line-height: 1.1;
-  letter-spacing: 0;
-  color: var(--text-primary);
-  animation: fadeSlideUp 0.5s ease-out 0.2s both;
-
-  @media (max-width: $breakpoint-mobile) {
-    font-size: 34px;
-  }
-}
-
-.heroCaring {
-  margin: $spacing-xs 0 0;
-  font-size: 15px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  animation: fadeSlideUp 0.5s ease-out 0.3s both;
 }
 
 // ─── Hero Meta (right side) ─────────────────────────────

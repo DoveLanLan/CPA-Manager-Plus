@@ -13,13 +13,6 @@
   }
 }
 
-.pageTitle {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0 0 $spacing-lg 0;
-}
-
 .tabBar {
   display: flex;
   gap: $spacing-xs;
@@ -620,11 +613,6 @@
 }
 
 @media (max-height: 820px) {
-  .pageTitle {
-    font-size: 24px;
-    margin-bottom: $spacing-md;
-  }
-
   .tabBar {
     margin-bottom: $spacing-md;
   }
@@ -669,11 +657,6 @@
 }
 
 @media (max-height: 600px) {
-  .pageTitle {
-    font-size: 20px;
-    margin-bottom: $spacing-sm;
-  }
-
   .tabBar {
     margin-bottom: $spacing-sm;
   }

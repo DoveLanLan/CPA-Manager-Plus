@@ -452,8 +452,6 @@ export function LogsPage() {
 
   return (
     <div className={styles.container}>
-      <h1 className={styles.pageTitle}>{t('logs.title')}</h1>
-
       <div className={styles.tabBar}>
         <button
           type="button"

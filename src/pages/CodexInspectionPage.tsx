@@ -1008,11 +1008,6 @@ export function CodexInspectionPage() {
 
   return (
     <div className={styles.page}>
-      <div className={styles.pageHeader}>
-        <h1 className={styles.pageTitle}>{t('monitoring.codex_inspection_title')}</h1>
-        <p className={styles.description}>{t('monitoring.codex_inspection_desc')}</p>
-      </div>
-
       <Card className={`${styles.panel} ${styles.statusPanel}`}>
         <div className={styles.statusBar}>
           <div className={styles.statusInfo}>

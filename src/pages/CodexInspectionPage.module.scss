@@ -25,28 +25,6 @@
   min-width: 0;
 }
 
-.pageHeader {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-
-.pageTitle {
-  margin: 0;
-  color: var(--inspect-ink);
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.description {
-  margin: 0;
-  color: var(--inspect-muted);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
 .panel,
 .summaryCard {
   position: relative;
