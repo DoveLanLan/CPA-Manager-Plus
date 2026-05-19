@@ -185,6 +185,63 @@ export interface DashboardTopModel {
   success_rate: number;
 }
 
+export interface DashboardTrafficPoint {
+  bucket_ms: number;
+  calls: number;
+  tokens: number;
+  success: number;
+  failure: number;
+  calls_share: number;
+  tokens_share: number;
+  failure_rate: number;
+}
+
+export interface DashboardHourlyActivityPoint {
+  hour_index: number;
+  bucket_ms: number;
+  calls: number;
+  tokens: number;
+  intensity: number;
+}
+
+export interface DashboardTokenMixSegment {
+  key: 'input' | 'output' | 'reasoning' | 'cached' | string;
+  tokens: number;
+  share: number;
+}
+
+export interface DashboardModelCostRank {
+  model: string;
+  calls: number;
+  tokens: number;
+  cost: number;
+  success_rate: number;
+  cost_share: number;
+}
+
+export interface DashboardChannelHealth {
+  auth_index: string;
+  calls: number;
+  failures: number;
+  failure_rate: number;
+  success_rate: number;
+  tokens: number;
+  cost: number;
+  average_latency_ms: number | null;
+  tone: 'good' | 'warn' | 'bad' | string;
+}
+
+export interface DashboardFailureSource {
+  source_hash: string;
+  auth_index: string;
+  calls: number;
+  failures: number;
+  failure_rate: number;
+  last_seen_ms: number;
+  average_latency_ms: number | null;
+  tone: 'good' | 'warn' | 'bad' | string;
+}
+
 export interface DashboardRecentFailure {
   timestamp_ms: number;
   model: string;
@@ -201,6 +258,12 @@ export interface DashboardSummaryResponse {
   today: DashboardTodaySummary;
   rolling_30m: DashboardRollingSummary;
   top_models_today: DashboardTopModel[];
+  model_cost_rank?: DashboardModelCostRank[];
+  traffic_timeline?: DashboardTrafficPoint[];
+  hourly_activity?: DashboardHourlyActivityPoint[];
+  token_mix?: DashboardTokenMixSegment[];
+  channel_health?: DashboardChannelHealth[];
+  failure_sources?: DashboardFailureSource[];
   recent_failures: DashboardRecentFailure[];
 }
 

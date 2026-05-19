@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   IconChartLine,
@@ -13,10 +14,13 @@ import styles from './UsageMetricsCard.module.scss';
 interface UsageMetricsCardProps {
   summary: DashboardSummaryResponse | null;
   topModels: DashboardSummaryResponse['top_models_today'];
+  modelCostRank: DashboardSummaryResponse['model_cost_rank'];
   loading: boolean;
   error?: string;
   lastRefreshedAt: Date | null;
 }
+
+type BarStyle = CSSProperties & Record<'--share', number>;
 
 const formatMetric = (value: number | undefined, digits = 0) => {
   if (value === undefined || !Number.isFinite(value)) return '-';
@@ -34,6 +38,7 @@ const formatPercent = (value: number | undefined) => {
 export function UsageMetricsCard({
   summary,
   topModels,
+  modelCostRank,
   loading,
   error,
   lastRefreshedAt,
@@ -76,7 +81,9 @@ export function UsageMetricsCard({
     {
       key: 'latency',
       label: t('dashboard.avg_latency'),
-      value: today ? formatDurationMs(today.average_latency_ms, { locale: i18n.language }) : loadingText,
+      value: today
+        ? formatDurationMs(today.average_latency_ms, { locale: i18n.language })
+        : loadingText,
       icon: <IconTimer size={18} />,
     },
   ];
@@ -104,7 +111,28 @@ export function UsageMetricsCard({
 
       {error ? <div className={styles.error}>{error}</div> : null}
 
-      {topModels.length > 0 ? (
+      {modelCostRank?.length ? (
+        <div className={styles.modelRank}>
+          <div className={styles.rankTitle}>{t('dashboard.model_cost_rank')}</div>
+          {modelCostRank.slice(0, 4).map((model) => (
+            <div key={model.model} className={styles.modelRankRow}>
+              <div className={styles.modelRankMeta}>
+                <span title={model.model}>{model.model}</span>
+                <strong>{formatUsd(model.cost)}</strong>
+              </div>
+              <div className={styles.modelRankTrack}>
+                <span
+                  className={styles.modelRankBar}
+                  style={{ '--share': model.cost_share } as BarStyle}
+                />
+              </div>
+              <small>
+                {formatCompactNumber(model.calls)} · {formatCompactNumber(model.tokens)}
+              </small>
+            </div>
+          ))}
+        </div>
+      ) : topModels.length > 0 ? (
         <div className={styles.modelList}>
           {topModels.slice(0, 3).map((model) => (
             <div key={model.model} className={styles.modelRow}>

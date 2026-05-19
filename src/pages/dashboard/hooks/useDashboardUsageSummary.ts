@@ -18,6 +18,12 @@ export interface UseDashboardUsageSummaryReturn {
   summary: DashboardSummaryResponse | null;
   recentFailures: DashboardSummaryResponse['recent_failures'];
   topModels: DashboardSummaryResponse['top_models_today'];
+  modelCostRank: NonNullable<DashboardSummaryResponse['model_cost_rank']>;
+  trafficTimeline: NonNullable<DashboardSummaryResponse['traffic_timeline']>;
+  hourlyActivity: NonNullable<DashboardSummaryResponse['hourly_activity']>;
+  tokenMix: NonNullable<DashboardSummaryResponse['token_mix']>;
+  channelHealth: NonNullable<DashboardSummaryResponse['channel_health']>;
+  failureSources: NonNullable<DashboardSummaryResponse['failure_sources']>;
   lastRefreshedAt: Date | null;
   serviceBase: string;
   refresh: () => Promise<void>;
@@ -94,19 +100,16 @@ export function useDashboardUsageSummary(): UseDashboardUsageSummaryReturn {
       summary,
       recentFailures: summary?.recent_failures ?? [],
       topModels: summary?.top_models_today ?? [],
+      modelCostRank: summary?.model_cost_rank ?? [],
+      trafficTimeline: summary?.traffic_timeline ?? [],
+      hourlyActivity: summary?.hourly_activity ?? [],
+      tokenMix: summary?.token_mix ?? [],
+      channelHealth: summary?.channel_health ?? [],
+      failureSources: summary?.failure_sources ?? [],
       lastRefreshedAt,
       serviceBase,
       refresh,
     }),
-    [
-      availability.checking,
-      enabled,
-      error,
-      lastRefreshedAt,
-      loading,
-      refresh,
-      serviceBase,
-      summary,
-    ]
+    [availability.checking, enabled, error, lastRefreshedAt, loading, refresh, serviceBase, summary]
   );
 }

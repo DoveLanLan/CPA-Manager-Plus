@@ -9,6 +9,7 @@ import { VersionCard } from './dashboard/components/VersionCard';
 import { UsageMetricsCard } from './dashboard/components/UsageMetricsCard';
 import { CollectorStatusCard } from './dashboard/components/CollectorStatusCard';
 import { HealthAlertsCard } from './dashboard/components/HealthAlertsCard';
+import { TrafficOverviewCard } from './dashboard/components/TrafficOverviewCard';
 import { useDashboardUsageSummary } from './dashboard/hooks/useDashboardUsageSummary';
 import styles from './DashboardPage.module.scss';
 
@@ -314,9 +315,18 @@ export function DashboardPage() {
       {usageSummary.enabled && (
         <section className={styles.usageSection}>
           <div className={styles.usageCardGrid}>
+            <div className={styles.trafficOverview}>
+              <TrafficOverviewCard
+                timeline={usageSummary.trafficTimeline}
+                hourlyActivity={usageSummary.hourlyActivity}
+                tokenMix={usageSummary.tokenMix}
+                loading={usageSummary.loading}
+              />
+            </div>
             <UsageMetricsCard
               summary={usageSummary.summary}
               topModels={usageSummary.topModels}
+              modelCostRank={usageSummary.modelCostRank}
               loading={usageSummary.loading}
               error={usageSummary.error}
               lastRefreshedAt={usageSummary.lastRefreshedAt}
@@ -331,6 +341,8 @@ export function DashboardPage() {
               enabled={usageSummary.enabled}
               loading={usageSummary.loading}
               recentFailures={usageSummary.recentFailures}
+              channelHealth={usageSummary.channelHealth}
+              failureSources={usageSummary.failureSources}
               refreshSignal={cardRefreshSignal}
             />
           </div>
