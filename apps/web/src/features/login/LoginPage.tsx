@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
 import {
   IconCheck,
@@ -104,6 +103,7 @@ export function LoginPage() {
   const storedKey = useAuthStore((state) => state.managementKey);
   const storedRememberPassword = useAuthStore((state) => state.rememberPassword);
   const setUsageServiceConfig = useUsageServiceStore((state) => state.setUsageServiceConfig);
+  const languageMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [apiBase, setApiBase] = useState('');
   const [adminKey, setAdminKey] = useState('');
@@ -120,6 +120,7 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [hostedByUsageService, setHostedByUsageService] = useState(false);
   const [usageServiceNeedsSetup, setUsageServiceNeedsSetup] = useState(false);
+  const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [hasHistoricalData, setHasHistoricalData] = useState(false);
   const [migrationStatus, setMigrationStatus] = useState('');
   const [usageSetupStep, setUsageSetupStep] = useState<UsageSetupStep>('admin');
@@ -162,23 +163,47 @@ export function LoginPage() {
     }),
     [t]
   );
-  const languageOptions = useMemo(
-    () =>
-      LANGUAGE_ORDER.map((lang) => ({
-        value: lang,
-        label: t(LANGUAGE_LABEL_KEYS[lang]),
-      })),
-    [t]
-  );
+  const toggleLanguageMenu = useCallback(() => {
+    setLanguageMenuOpen((prev) => !prev);
+  }, []);
 
-  const handleLanguageChange = useCallback(
+  const handleLanguageSelect = useCallback(
     (selectedLanguage: string) => {
-      if (isSupportedLanguage(selectedLanguage)) {
-        setLanguage(selectedLanguage);
+      if (!isSupportedLanguage(selectedLanguage)) {
+        return;
       }
+
+      setLanguage(selectedLanguage);
+      setLanguageMenuOpen(false);
     },
     [setLanguage]
   );
+
+  useEffect(() => {
+    if (!languageMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!languageMenuRef.current?.contains(event.target as Node)) {
+        setLanguageMenuOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setLanguageMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [languageMenuOpen]);
 
   useEffect(() => {
     const init = async () => {
@@ -460,16 +485,40 @@ export function LoginPage() {
         >
           {theme === 'dark' ? <IconMoon size={17} /> : <IconSun size={17} />}
         </button>
-        <div className={styles.languageControl}>
-          <IconLanguages size={16} />
-          <Select
-            className={styles.languageSelect}
-            value={language}
-            options={languageOptions}
-            onChange={handleLanguageChange}
-            fullWidth={false}
-            ariaLabel={t('language.switch')}
-          />
+        <div className={styles.languageMenu} ref={languageMenuRef}>
+          <button
+            type="button"
+            className={styles.toolButton}
+            onClick={toggleLanguageMenu}
+            aria-label={t('language.switch')}
+            title={t('language.switch')}
+            aria-haspopup="menu"
+            aria-expanded={languageMenuOpen}
+          >
+            <IconLanguages size={17} />
+          </button>
+          {languageMenuOpen && (
+            <div
+              className={styles.languagePopover}
+              role="menu"
+              aria-label={t('language.switch')}
+            >
+              {LANGUAGE_ORDER.map((lang) => (
+                <button
+                  key={lang}
+                  type="button"
+                  className={`${styles.languageOption} ${
+                    language === lang ? styles.languageOptionActive : ''
+                  }`}
+                  onClick={() => handleLanguageSelect(lang)}
+                  role="menuitemradio"
+                  aria-checked={language === lang}
+                >
+                  {t(LANGUAGE_LABEL_KEYS[lang])}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
