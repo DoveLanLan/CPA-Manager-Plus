@@ -496,6 +496,7 @@ export function DashboardPage() {
         <section className={styles.chartsRow}>
           <TrafficOverviewCard
             timeline={usageSummary.trafficTimeline}
+            trafficNowMs={usageSummary.summary?.window.now_ms}
             todayRequestHealthTimeline={usageSummary.todayRequestHealthTimeline}
             tokenMix={usageSummary.tokenMix}
             totalTokens={usageSummary.summary?.today.total_tokens}

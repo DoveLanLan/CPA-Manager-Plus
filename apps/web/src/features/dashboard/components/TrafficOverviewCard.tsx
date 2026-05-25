@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   DashboardTodayRequestHealthTimeline,
@@ -7,19 +7,28 @@ import type {
   DashboardTrafficPoint,
 } from '@/services/api/usageService';
 import { formatCompactNumber } from '@/utils/usage';
+import {
+  buildCallsLinePath,
+  buildTrafficAxisTickIndexes,
+  buildVisibleTrafficTimeline,
+  getTrafficMetricShare,
+  isCurrentTrafficBucket,
+} from './trafficOverviewChartModel';
 import styles from './TrafficOverviewCard.module.scss';
 
 interface TrafficOverviewCardProps {
   timeline: DashboardTrafficPoint[];
+  trafficNowMs?: number | null;
   todayRequestHealthTimeline: DashboardTodayRequestHealthTimeline | null;
   tokenMix: DashboardTokenMixSegment[];
   totalTokens?: number;
   loading: boolean;
 }
 
-type ChartStyle = CSSProperties & Record<'--calls-share' | '--tokens-share', number>;
+type TrafficGridStyle = CSSProperties & Record<'--bucket-count', number>;
+type TrafficBarStyle = CSSProperties & Record<'--metric-share' | '--metric-min-height', number | string>;
+type TokenRankStyle = CSSProperties & Record<'--rank-share' | '--rank-color', number | string>;
 type HealthCellStyle = CSSProperties & Record<'--cell-intensity', number>;
-type DonutStyle = CSSProperties & Record<'--dash' | '--offset' | '--color', string>;
 
 const fallbackHealthBucketMs = 10 * 60 * 1000;
 
@@ -74,6 +83,7 @@ const buildHealthTitle = (
 
 export function TrafficOverviewCard({
   timeline,
+  trafficNowMs,
   todayRequestHealthTimeline,
   tokenMix,
   totalTokens: todayTotalTokens,
@@ -81,17 +91,16 @@ export function TrafficOverviewCard({
 }: TrafficOverviewCardProps) {
   const { t, i18n } = useTranslation();
   const [activeTokenSegment, setActiveTokenSegment] = useState<DashboardTokenMixSegment | null>(null);
-  const hasData = timeline.some((point) => point.calls > 0 || point.tokens > 0);
+  const visibleTimeline = buildVisibleTrafficTimeline(timeline, trafficNowMs);
+  const hasData = visibleTimeline.some((point) => point.calls > 0 || point.tokens > 0);
   const tokenMixTotal = tokenMix.reduce((acc, s) => acc + s.tokens, 0);
   const displayTotalTokens = todayTotalTokens ?? tokenMixTotal;
   const hasTokenMixData = tokenMix.some((segment) => segment.tokens > 0);
-  const tokenPolyline = timeline
-    .map((point, index) => {
-      const x = timeline.length <= 1 ? 50 : (index / (timeline.length - 1)) * 100;
-      const y = 100 - Math.max(0, Math.min(1, point.tokens_share)) * 100;
-      return `${x},${y}`;
-    })
-    .join(' ');
+  const rankedTokenMix = [...tokenMix].sort((left, right) => right.tokens - left.tokens);
+  const maxTokenMixTokens = rankedTokenMix.reduce((max, segment) => Math.max(max, segment.tokens), 0);
+  const trafficAxisTickIndexes = buildTrafficAxisTickIndexes(visibleTimeline.length);
+  const trafficGridStyle = { '--bucket-count': Math.max(visibleTimeline.length, 1) } as TrafficGridStyle;
+  const callsLinePath = buildCallsLinePath(visibleTimeline);
   const healthPoints = todayRequestHealthTimeline?.points ?? [];
   const healthBucketMs = todayRequestHealthTimeline?.bucket_ms || fallbackHealthBucketMs;
   const healthRowsPerHour = Math.max(1, Math.round((60 * 60 * 1000) / healthBucketMs));
@@ -119,43 +128,59 @@ export function TrafficOverviewCard({
             </span>
           </div>
         </div>
-        <div className={styles.chartFrame}>
-          <div className={styles.yAxisLeft}>{t('dashboard.traffic_calls')}</div>
-          <div className={styles.yAxisRight}>{t('dashboard.traffic_tokens')}</div>
-          <div className={styles.barChart}>
-            {timeline.map((point) => (
-              <div
-                key={point.bucket_ms}
-                className={styles.barColumn}
-                style={
-                  {
-                    '--calls-share': point.calls_share,
-                    '--tokens-share': point.tokens_share,
-                  } as ChartStyle
-                }
-                title={`${formatHour(point.bucket_ms, i18n.language)} · ${t('dashboard.traffic_calls')}: ${formatCompactNumber(point.calls)} · ${t('dashboard.traffic_tokens')}: ${formatCompactNumber(point.tokens)}`}
-              >
-                <div className={styles.callBar} />
-              </div>
-            ))}
-            {hasData && (
-              <svg className={styles.tokenLine} viewBox="0 0 100 100" preserveAspectRatio="none">
-                <polyline points={tokenPolyline} />
+        <div className={styles.trafficChart}>
+          <div className={styles.trafficPlot}>
+            <div className={styles.trafficGridLines} aria-hidden="true">
+              {Array.from({ length: 5 }, (_, index) => <span key={index} />)}
+            </div>
+            <div className={styles.trafficBars} style={trafficGridStyle}>
+              {visibleTimeline.map((point) => {
+                const share = getTrafficMetricShare(point, 'tokens');
+                return (
+                  <div
+                    key={point.bucket_ms}
+                    className={`${styles.trafficBucket} ${
+                      isCurrentTrafficBucket(point, trafficNowMs) ? styles.trafficBucketPartial : ''
+                    }`}
+                    title={`${formatHour(point.bucket_ms, i18n.language)} · ${t('dashboard.traffic_calls')}: ${formatCompactNumber(point.calls)} · ${t('dashboard.traffic_tokens')}: ${formatCompactNumber(point.tokens)}`}
+                  >
+                    <div
+                      className={`${styles.trafficBar} ${styles.tokensBar}`}
+                      style={
+                        {
+                          '--metric-share': share,
+                          '--metric-min-height': share > 0 ? '2px' : '0px',
+                        } as TrafficBarStyle
+                      }
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            {hasData ? (
+              <svg className={styles.callsLineLayer} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <path d={callsLinePath} />
               </svg>
-            )}
+            ) : null}
+            <div className={styles.trafficYAxis} aria-hidden="true">
+              <span>{t('dashboard.traffic_tokens')}</span>
+              <span>{t('dashboard.traffic_calls')}</span>
+            </div>
             {!hasData && !loading && (
               <div className={styles.empty}>{t('dashboard.no_traffic_data')}</div>
             )}
             {loading && !hasData && <div className={styles.empty}>...</div>}
           </div>
-        </div>
-        <div className={styles.xAxis}>
-          <span>00:00</span>
-          <span>04:00</span>
-          <span>08:00</span>
-          <span>12:00</span>
-          <span>16:00</span>
-          <span>20:00</span>
+          <div className={styles.trafficAxis} style={trafficGridStyle}>
+            {trafficAxisTickIndexes.map((index) => {
+              const point = visibleTimeline[index];
+              return point ? (
+                <span key={point.bucket_ms} style={{ gridColumn: index + 1 }}>
+                  {formatHour(point.bucket_ms, i18n.language)}
+                </span>
+              ) : null;
+            })}
+          </div>
         </div>
       </section>
 
@@ -238,104 +263,59 @@ export function TrafficOverviewCard({
         <div className={styles.cardHeader}>
           <h3>{t('dashboard.token_mix_today')}</h3>
         </div>
-        <div className={styles.doughnutSection}>
-          <div className={styles.doughnutChart}>
-            <svg viewBox="0 0 100 100">
-              <circle className={styles.doughnutTrack} cx="50" cy="50" r="35" />
-              {
-                tokenMix.reduce(
-                  (acc, segment) => {
-                    const startAngle = acc.currentAngle;
-                    const sweepAngle = segment.share * 360;
-                    acc.currentAngle += sweepAngle;
-
-                    const radius = 35;
-                    const circumference = 2 * Math.PI * radius;
-                    const offset = (startAngle / 360) * circumference;
-                    const length = segment.share * circumference;
-
-                    return {
-                      ...acc,
-                      elements: [
-                        ...acc.elements,
-                        <circle
-                          key={segment.key}
-                          cx="50"
-                          cy="50"
-                          r={radius}
-                          fill="none"
-                          className={`${styles.doughnutSegment} ${
-                            activeTokenSegment?.key === segment.key ? styles.doughnutSegmentActive : ''
-                          }`}
-                          style={
-                            {
-                              '--dash': `${length} ${circumference}`,
-                              '--offset': `${-offset}`,
-                              '--color': tokenColorMap[segment.key] || '#ccc',
-                            } as DonutStyle
-                          }
-                          tabIndex={0}
-                          role="img"
-                          aria-label={`${t(tokenLabelMap[segment.key] || segment.key)} ${formatCompactNumber(segment.tokens)} ${(segment.share * 100).toFixed(1)}%`}
-                          onMouseEnter={() => setActiveTokenSegment(segment)}
-                          onMouseLeave={() => setActiveTokenSegment(null)}
-                          onFocus={() => setActiveTokenSegment(segment)}
-                          onBlur={() => setActiveTokenSegment(null)}
-                        />,
-                      ],
-                    };
-                  },
-                  { currentAngle: 0, elements: [] as ReactNode[] }
-                ).elements
-              }
-            </svg>
-            <div className={styles.doughnutCenter}>
-              <span className={styles.centerLabel}>{t('dashboard.total_tokens')}</span>
-              <span className={styles.centerValue}>{formatCompactNumber(displayTotalTokens)}</span>
+        <div className={styles.tokenRankSection}>
+          <div className={styles.tokenSummary}>
+            <span>{t('dashboard.total_tokens')}</span>
+            <strong>{loading && !hasTokenMixData ? '...' : formatCompactNumber(displayTotalTokens)}</strong>
+          </div>
+          {hasTokenMixData ? (
+            <div className={styles.tokenRankList}>
+              {rankedTokenMix.map((segment) => (
+                <button
+                  type="button"
+                  key={segment.key}
+                  className={`${styles.tokenRankRow} ${
+                    activeTokenSegment?.key === segment.key ? styles.tokenRankRowActive : ''
+                  }`}
+                  onMouseEnter={() => setActiveTokenSegment(segment)}
+                  onMouseLeave={() => setActiveTokenSegment(null)}
+                  onFocus={() => setActiveTokenSegment(segment)}
+                  onBlur={() => setActiveTokenSegment(null)}
+                  aria-label={`${t(tokenLabelMap[segment.key] || segment.key)} ${formatCompactNumber(segment.tokens)} ${(segment.share * 100).toFixed(1)}%`}
+                >
+                  <span className={styles.tokenRankHeader}>
+                    <span className={styles.tokenRankIdentity}>
+                      <i
+                        className={styles.tokenRankSwatch}
+                        style={{ background: tokenColorMap[segment.key] || '#ccc' }}
+                        aria-hidden="true"
+                      />
+                      <span>{t(tokenLabelMap[segment.key] || segment.key)}</span>
+                    </span>
+                    <span className={styles.tokenRankMeta}>
+                      <strong>{formatCompactNumber(segment.tokens)}</strong>
+                      <span>{(segment.share * 100).toFixed(1)}%</span>
+                    </span>
+                  </span>
+                  <span className={styles.tokenRankTrack}>
+                    <span
+                      className={styles.tokenRankBar}
+                      style={
+                        {
+                          '--rank-share': maxTokenMixTokens > 0 ? segment.tokens / maxTokenMixTokens : 0,
+                          '--rank-color': tokenColorMap[segment.key] || '#ccc',
+                        } as TokenRankStyle
+                      }
+                    />
+                  </span>
+                </button>
+              ))}
             </div>
-            {!hasTokenMixData ? (
-              <div className={styles.tokenEmptyState}>
-                {loading ? '...' : t('dashboard.no_token_mix_data')}
-              </div>
-            ) : null}
-            {activeTokenSegment ? (
-              <div className={styles.tokenTooltip}>
-                <span className={styles.tokenTooltipLabel}>
-                  <i style={{ background: tokenColorMap[activeTokenSegment.key] || '#ccc' }} />
-                  {t(tokenLabelMap[activeTokenSegment.key] || activeTokenSegment.key)}
-                </span>
-                <strong>{formatCompactNumber(activeTokenSegment.tokens)}</strong>
-                <span>{(activeTokenSegment.share * 100).toFixed(1)}%</span>
-              </div>
-            ) : null}
-          </div>
-          <div className={styles.tokenBreakdownList}>
-            {tokenMix.map((segment) => (
-              <button
-                type="button"
-                key={segment.key}
-                className={`${styles.tokenBreakdownRow} ${
-                  activeTokenSegment?.key === segment.key ? styles.tokenBreakdownRowActive : ''
-                }`}
-                onMouseEnter={() => setActiveTokenSegment(segment)}
-                onMouseLeave={() => setActiveTokenSegment(null)}
-                onFocus={() => setActiveTokenSegment(segment)}
-                onBlur={() => setActiveTokenSegment(null)}
-                aria-label={`${t(tokenLabelMap[segment.key] || segment.key)} ${formatCompactNumber(segment.tokens)} ${(segment.share * 100).toFixed(1)}%`}
-              >
-                <span className={styles.tokenBreakdownLeft}>
-                  <i
-                    className={styles.tokenBreakdownSwatch}
-                    style={{ background: tokenColorMap[segment.key] || '#ccc' }}
-                    aria-hidden="true"
-                  />
-                  <span>{t(tokenLabelMap[segment.key] || segment.key)}</span>
-                </span>
-                <span className={styles.tokenBreakdownValue}>{formatCompactNumber(segment.tokens)}</span>
-                <span className={styles.tokenBreakdownShare}>{(segment.share * 100).toFixed(1)}%</span>
-              </button>
-            ))}
-          </div>
+          ) : (
+            <div className={styles.tokenEmptyState}>
+              {loading ? '...' : t('dashboard.no_token_mix_data')}
+            </div>
+          )}
         </div>
       </section>
     </div>
