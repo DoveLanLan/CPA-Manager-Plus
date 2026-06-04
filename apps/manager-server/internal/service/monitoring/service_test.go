@@ -293,6 +293,93 @@ func TestAnalyticsUsesResolvedModelPricingInAggregates(t *testing.T) {
 	}
 }
 
+func TestAnalyticsPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_010_000_000)
+	toMS := fromMS + 60*60*1000
+
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-5.4": {Prompt: 2.5},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	latency100 := int64(100)
+	latency200 := int64(200)
+	latency1000 := int64(1000)
+	standard := monitoringEvent("tier-default", fromMS+1_000, "gpt-5.4", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, &latency100)
+	standard.ServiceTier = "default"
+	standard.AccountSnapshot = "team@example.com"
+	standard.AuthLabelSnapshot = "Team"
+	standard.APIKeyHash = "client-key"
+	standardSecond := monitoringEvent("tier-default-second", fromMS+1_500, "gpt-5.4", "auth-1", "source-a", false, 0, 0, 0, 0, 0, &latency200)
+	standardSecond.ServiceTier = "default"
+	standardSecond.AccountSnapshot = "team@example.com"
+	standardSecond.AuthLabelSnapshot = "Team"
+	standardSecond.APIKeyHash = "client-key"
+	priority := monitoringEvent("tier-priority", fromMS+2_000, "gpt-5.4", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, &latency1000)
+	priority.ServiceTier = "priority"
+	priority.AccountSnapshot = "team@example.com"
+	priority.AuthLabelSnapshot = "Team"
+	priority.APIKeyHash = "client-key"
+	if _, err := db.InsertEvents(ctx, []usage.Event{standard, standardSecond, priority}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			Summary:      true,
+			ModelShare:   true,
+			ModelStats:   true,
+			ChannelShare: true,
+			AccountStats: true,
+			APIKeyStats:  true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	assertCost := func(name string, got float64) {
+		t.Helper()
+		if math.Abs(got-7.5) > 0.000001 {
+			t.Fatalf("%s cost = %v, want 7.5", name, got)
+		}
+	}
+	if resp.Summary == nil {
+		t.Fatal("summary is nil")
+	}
+	assertCost("summary", resp.Summary.TotalCost)
+	if len(resp.ModelStats) != 1 || resp.ModelStats[0].Calls != 3 {
+		t.Fatalf("model stats = %#v", resp.ModelStats)
+	}
+	assertCost("model stats", resp.ModelStats[0].Cost)
+	if len(resp.ModelShare) != 1 {
+		t.Fatalf("model share = %#v", resp.ModelShare)
+	}
+	assertCost("model share", resp.ModelShare[0].Cost)
+	if len(resp.ChannelShare) != 1 {
+		t.Fatalf("channel share = %#v", resp.ChannelShare)
+	}
+	assertCost("channel share", resp.ChannelShare[0].Cost)
+	if resp.ChannelShare[0].AvgLatencyMS == nil || math.Abs(*resp.ChannelShare[0].AvgLatencyMS-(1300.0/3.0)) > 0.000001 {
+		t.Fatalf("channel latency = %#v, want weighted 433.333333", resp.ChannelShare[0].AvgLatencyMS)
+	}
+	if len(resp.AccountStats) != 1 || len(resp.AccountStats[0].Models) != 1 {
+		t.Fatalf("account stats = %#v", resp.AccountStats)
+	}
+	assertCost("account stats", resp.AccountStats[0].Cost)
+	assertCost("account model stats", resp.AccountStats[0].Models[0].Cost)
+	if len(resp.APIKeyStats) != 1 || len(resp.APIKeyStats[0].Models) != 1 {
+		t.Fatalf("api key stats = %#v", resp.APIKeyStats)
+	}
+	assertCost("api key stats", resp.APIKeyStats[0].Cost)
+	assertCost("api key model stats", resp.APIKeyStats[0].Models[0].Cost)
+}
+
 func TestAnalyticsAppliesFilters(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()

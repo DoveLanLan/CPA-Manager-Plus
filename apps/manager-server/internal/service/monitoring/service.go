@@ -710,9 +710,9 @@ func buildChannelShare(stats []store.ChannelModelStat, prices map[string]store.M
 		entry.row.Failure += stat.FailureCalls
 		entry.row.Tokens += stat.TotalTokens
 		entry.row.Cost += costForChannelStat(stat, prices)
-		if stat.AvgLatencyMS.Valid {
-			entry.latencySum += stat.AvgLatencyMS.Float64
-			entry.latencyN++
+		if stat.AvgLatencyMS.Valid && stat.LatencySamples > 0 {
+			entry.latencySum += stat.AvgLatencyMS.Float64 * float64(stat.LatencySamples)
+			entry.latencyN += stat.LatencySamples
 		}
 	}
 	result := make([]ChannelShareRow, 0, len(grouped))
@@ -1202,7 +1202,7 @@ func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,
@@ -1216,7 +1216,7 @@ func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.Mod
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,
@@ -1230,7 +1230,7 @@ func costForAccountModelStat(stat store.AccountModelStat, prices map[string]stor
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,
@@ -1244,7 +1244,7 @@ func costForAPIKeyModelStat(stat store.APIKeyModelStat, prices map[string]store.
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,
