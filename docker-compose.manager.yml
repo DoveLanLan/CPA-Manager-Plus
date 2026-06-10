@@ -3,8 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.manager-server
-    image: seakee/cpa-manager-plus:latest
+    image: ghcr.io/dovelanlan/cpa-manager-plus:main
+    container_name: cpa-manager-plus
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "18317:18317"
     environment:
@@ -23,7 +26,7 @@ services:
       USAGE_QUERY_LIMIT: "50000"
       USAGE_CORS_ORIGINS: "*"
     volumes:
-      - cpa-manager-plus-data:/data
+      - cpa-manager-data:/data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18317/health"]
       interval: 10s
@@ -31,4 +34,5 @@ services:
       retries: 3
 
 volumes:
-  cpa-manager-plus-data:
+  cpa-manager-data:
+    name: cpa-manager-data
