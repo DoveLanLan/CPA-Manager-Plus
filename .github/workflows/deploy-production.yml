@@ -1,0 +1,89 @@
+name: Deploy Production
+
+on:
+  workflow_run:
+    workflows:
+      - GHCR Image
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to deploy from GHCR
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpa-manager-plus-production
+  cancel-in-progress: true
+
+env:
+  DEPLOY_HOST: 23.175.201.12
+  DEPLOY_PORT: "22"
+  DEPLOY_USER: root
+  DEPLOY_ROOT: /opt/cpa-manager-plus
+
+jobs:
+  deploy:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Determine deploy ref and image
+        id: target
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            DEPLOY_REF="${GITHUB_SHA}"
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          else
+            DEPLOY_REF="${{ github.event.workflow_run.head_sha }}"
+            IMAGE_TAG="sha-${{ github.event.workflow_run.head_sha }}"
+          fi
+          echo "deploy_ref=${DEPLOY_REF}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/dovelanlan/cpa-manager-plus:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout deploy assets
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.deploy_ref }}
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Package deploy assets
+        run: tar czf /tmp/cpa-manager-plus-deploy.tgz -C deploy .
+
+      - name: Upload deploy assets
+        run: |
+          set -euo pipefail
+          scp -P "$DEPLOY_PORT" /tmp/cpa-manager-plus-deploy.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/cpa-manager-plus-deploy.tgz"
+
+      - name: Install deploy assets on server
+        run: |
+          set -euo pipefail
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
+            mkdir -p '$DEPLOY_ROOT' && \
+            tar xzf /tmp/cpa-manager-plus-deploy.tgz -C '$DEPLOY_ROOT'"
+
+      - name: Deploy production stack
+        run: |
+          set -euo pipefail
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
+            cd '$DEPLOY_ROOT' && \
+            CPA_MANAGER_PLUS_IMAGE='${{ steps.target.outputs.image }}' bash scripts/remote-deploy.sh"

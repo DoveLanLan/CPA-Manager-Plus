@@ -1,0 +1,41 @@
+services:
+  cpa-manager-plus:
+    image: ${CPA_MANAGER_PLUS_IMAGE:?set CPA_MANAGER_PLUS_IMAGE}
+    container_name: cpa-manager-plus
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      HTTP_ADDR: 0.0.0.0:18317
+      USAGE_DATA_DIR: /data
+      USAGE_DB_PATH: /data/usage.sqlite
+      CPA_MANAGER_DATA_KEY_PATH: ${CPA_MANAGER_DATA_KEY_PATH:-/data/data.key}
+      CPA_MANAGER_ADMIN_KEY_FILE: ${CPA_MANAGER_ADMIN_KEY_FILE:-/data/admin-key.txt}
+      CPA_MANAGEMENT_KEY_FILE: ${CPA_MANAGEMENT_KEY_FILE:-/data/cpa-management-key.txt}
+      CPA_UPSTREAM_URL: ${CPA_UPSTREAM_URL:-http://cli-proxy-api:8317}
+      USAGE_COLLECTOR_MODE: ${USAGE_COLLECTOR_MODE:-auto}
+      USAGE_RESP_QUEUE: ${USAGE_RESP_QUEUE:-usage}
+      USAGE_RESP_POP_SIDE: ${USAGE_RESP_POP_SIDE:-right}
+      USAGE_BATCH_SIZE: ${USAGE_BATCH_SIZE:-100}
+      USAGE_POLL_INTERVAL_MS: ${USAGE_POLL_INTERVAL_MS:-500}
+      USAGE_QUERY_LIMIT: ${USAGE_QUERY_LIMIT:-50000}
+      USAGE_CORS_ORIGINS: ${USAGE_CORS_ORIGINS:-*}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${TAILSCALE_BIND_IP:?set TAILSCALE_BIND_IP}:${TAILSCALE_CPA_MANAGER_PLUS_PORT:-18318}:18317"
+    expose:
+      - "18317"
+    volumes:
+      - ${CPA_MANAGER_PLUS_DATA_DIR:?set CPA_MANAGER_PLUS_DATA_DIR}:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18317/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: ${GATEWAY_NETWORK:-vps-gateway}
