@@ -1,4 +1,4 @@
-import { Profiler } from 'react';
+import { Profiler, useEffect } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApiKeyAlias } from '@/services/api/usageService';
@@ -42,6 +42,31 @@ const ALL_SCOPE_FILTERS = {
   status: 'all',
 } as const;
 
+type MonitoringDataResult = ReturnType<typeof useMonitoringData>;
+
+function MonitoringDataHarness({
+  onResult,
+}: {
+  onResult?: (result: MonitoringDataResult) => void;
+}) {
+  const result = useMonitoringData({
+    config: null,
+    modelPrices: EMPTY_MODEL_PRICES,
+    apiKeyAliases: EMPTY_API_KEY_ALIASES,
+    timeRange: 'today',
+    customTimeRange: null,
+    searchQuery: '',
+    searchApiKeyHash: '',
+    scopeFilters: ALL_SCOPE_FILTERS,
+  });
+
+  useEffect(() => {
+    onResult?.(result);
+  }, [onResult, result]);
+
+  return null;
+}
+
 describe('useMonitoringData render stability', () => {
   let renderer: ReactTestRenderer | null = null;
 
@@ -54,26 +79,12 @@ describe('useMonitoringData render stability', () => {
   it('settles while analytics events are still waiting for the first page', async () => {
     let renderCount = 0;
 
-    function Harness() {
-      useMonitoringData({
-        config: null,
-        modelPrices: EMPTY_MODEL_PRICES,
-        apiKeyAliases: EMPTY_API_KEY_ALIASES,
-        timeRange: 'today',
-        customTimeRange: null,
-        searchQuery: '',
-        searchApiKeyHash: '',
-        scopeFilters: ALL_SCOPE_FILTERS,
-      });
-      return null;
-    }
-
     await act(async () => {
       renderer = create(
         <Profiler id="monitoring-data" onRender={() => {
           renderCount += 1;
         }}>
-          <Harness />
+          <MonitoringDataHarness />
         </Profiler>
       );
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -83,24 +94,16 @@ describe('useMonitoringData render stability', () => {
   });
 
   it('refreshes analytics without reloading metadata on lightweight refresh', async () => {
-    let hookResult: ReturnType<typeof useMonitoringData> | null = null;
-
-    function Harness() {
-      hookResult = useMonitoringData({
-        config: null,
-        modelPrices: EMPTY_MODEL_PRICES,
-        apiKeyAliases: EMPTY_API_KEY_ALIASES,
-        timeRange: 'today',
-        customTimeRange: null,
-        searchQuery: '',
-        searchApiKeyHash: '',
-        scopeFilters: ALL_SCOPE_FILTERS,
-      });
-      return null;
-    }
+    let hookResult: MonitoringDataResult | null = null;
 
     await act(async () => {
-      renderer = create(<Harness />);
+      renderer = create(
+        <MonitoringDataHarness
+          onResult={(result) => {
+            hookResult = result;
+          }}
+        />
+      );
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
 

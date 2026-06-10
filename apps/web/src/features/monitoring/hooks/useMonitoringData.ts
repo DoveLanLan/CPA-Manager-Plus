@@ -867,7 +867,6 @@ export function useMonitoringData({
       authMetaMap,
       channelByAuthIndex,
       analyticsFilterOptions,
-      cachedAnalyticsFilterOptions,
       fallbackFilterOptions,
       sourceInfoMap,
     ]
