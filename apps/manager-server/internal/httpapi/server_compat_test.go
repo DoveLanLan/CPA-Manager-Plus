@@ -3,6 +3,7 @@ package httpapi
 import (
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -461,6 +462,63 @@ func TestServerCompatMonitoringAnalytics(t *testing.T) {
 		t.Fatalf("summary = %#v", payload.Summary)
 	}
 	if payload.Events == nil || len(payload.Events.Items) != 1 || payload.Events.Items[0].EventHash != "monitoring-analytics-event" {
+		t.Fatalf("events = %#v", payload.Events)
+	}
+}
+
+func TestServerCompatMonitoringAnalyticsGzip(t *testing.T) {
+	cpa := testutil.NewCPAMock(t)
+	setup := &store.Setup{CPAUpstreamURL: cpa.URL(), ManagementKey: "management-key", Queue: "usage", PopSide: "right"}
+	handler, db := newCompatHandler(t, testutil.NewConfig(t), setup)
+	event := compatEvent("monitoring-analytics-gzip-event", 10)
+	if _, err := db.InsertEvents(context.Background(), []usage.Event{event}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v0/management/monitoring/analytics",
+		strings.NewReader(`{"from_ms":1778000000000,"to_ms":1778000060000,"include":{"summary":true,"events_page":{"limit":10},"recent_failures":5}}`),
+	)
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Authorization", "Bearer "+testutil.AdminKey)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	testutil.RequireStatus(t, rr, http.StatusOK)
+	if rr.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("analytics content encoding = %q", rr.Header().Get("Content-Encoding"))
+	}
+
+	reader, err := gzip.NewReader(rr.Body)
+	if err != nil {
+		t.Fatalf("open gzip response: %v", err)
+	}
+	decompressed, err := io.ReadAll(reader)
+	if closeErr := reader.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("read gzip response: %v", err)
+	}
+
+	var payload struct {
+		Summary *struct {
+			TotalCalls int64 `json:"total_calls"`
+		} `json:"summary"`
+		Events *struct {
+			Items []struct {
+				EventHash string `json:"event_hash"`
+			} `json:"items"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(decompressed, &payload); err != nil {
+		t.Fatalf("decode gzip analytics: %v", err)
+	}
+	if payload.Summary == nil || payload.Summary.TotalCalls != 1 {
+		t.Fatalf("summary = %#v", payload.Summary)
+	}
+	if payload.Events == nil || len(payload.Events.Items) != 1 || payload.Events.Items[0].EventHash != "monitoring-analytics-gzip-event" {
 		t.Fatalf("events = %#v", payload.Events)
 	}
 }
