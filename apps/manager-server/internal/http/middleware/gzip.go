@@ -27,6 +27,7 @@ func WithGzipJSON(next http.HandlerFunc) http.HandlerFunc {
 
 		if recorder.header.Get("Content-Encoding") != "" || !isCompressibleJSON(recorder) {
 			copyHeaders(w.Header(), recorder.header)
+			w.Header().Set("Content-Length", strconv.Itoa(recorder.body.Len()))
 			if recorder.status != 0 {
 				w.WriteHeader(recorder.status)
 			}
