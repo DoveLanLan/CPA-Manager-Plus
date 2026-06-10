@@ -444,6 +444,7 @@ go run ./cmd/cpa-manager-plus
 - Redis 用量队列文档: https://help.router-for.me/management/redis-usage-queue.html
 - CPA-Manager 到 CPA Manager Plus 迁移指南: [docs/migration-from-cpa-manager.zh-CN.md](docs/migration-from-cpa-manager.zh-CN.md)
 - 重置 Manager Server 管理员密钥: [docs/reset-admin-key.zh-CN.md](docs/reset-admin-key.zh-CN.md)
+- 家里电脑本地 Docker 手动替换指南: [docs/local-docker-replace.zh-CN.md](docs/local-docker-replace.zh-CN.md)
 - 发布前检查清单: [docs/release-checklist.zh-CN.md](docs/release-checklist.zh-CN.md)
 
 ## 致谢
