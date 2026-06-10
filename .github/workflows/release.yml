@@ -116,8 +116,8 @@ jobs:
       packages: write
 
     env:
-      DOCKERHUB_IMAGE: seakee/cpa-manager-plus
-      GHCR_IMAGE: ghcr.io/seakee/cpa-manager-plus
+      DOCKERHUB_IMAGE: dovelanlan/cpa-manager-plus
+      GHCR_IMAGE: ghcr.io/dovelanlan/cpa-manager-plus
 
     steps:
       - name: Checkout code
@@ -149,10 +149,6 @@ jobs:
         id: docker_targets
         run: |
           set -euo pipefail
-          if [ "${DOCKERHUB_IMAGE}" != "seakee/cpa-manager-plus" ]; then
-            echo "Docker image name must be seakee/cpa-manager-plus" >&2
-            exit 1
-          fi
 
           images="${GHCR_IMAGE}"
           dockerhub_enabled=false
@@ -161,11 +157,6 @@ jobs:
             dockerhub_enabled=true
           else
             echo "::warning::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both configured; DockerHub publish will be skipped."
-          fi
-
-          if [ "${dockerhub_enabled}" = "true" ] && [ "${DOCKERHUB_IMAGE}" != "seakee/cpa-manager-plus" ]; then
-            echo "DockerHub image name must be seakee/cpa-manager-plus" >&2
-            exit 1
           fi
 
           {
