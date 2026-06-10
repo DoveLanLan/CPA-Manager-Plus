@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -94,6 +96,29 @@ func TestServerCompatHealthInfoAndPanel(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(panelRR.Body.String()), "<html") {
 		t.Fatalf("panel body does not look like html")
+	}
+
+	gzipReq := httptest.NewRequest(http.MethodGet, "/management.html", nil)
+	gzipReq.Header.Set("Accept-Encoding", "gzip")
+	gzipRR := httptest.NewRecorder()
+	handler.ServeHTTP(gzipRR, gzipReq)
+	testutil.RequireStatus(t, gzipRR, http.StatusOK)
+	if gzipRR.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("panel content encoding = %q", gzipRR.Header().Get("Content-Encoding"))
+	}
+	reader, err := gzip.NewReader(gzipRR.Body)
+	if err != nil {
+		t.Fatalf("open gzip response: %v", err)
+	}
+	decompressed, err := io.ReadAll(reader)
+	if closeErr := reader.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("read gzip response: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(decompressed)), "<html") {
+		t.Fatalf("gzip panel body does not look like html")
 	}
 }
 
