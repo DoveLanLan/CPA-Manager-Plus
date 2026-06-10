@@ -56,10 +56,16 @@ func Migrate(db *sql.DB) error {
 			created_at_ms integer not null
 		)`,
 		`create index if not exists idx_usage_events_timestamp on usage_events(timestamp_ms)`,
+		`create index if not exists idx_usage_events_timestamp_id on usage_events(timestamp_ms, id)`,
 		`create index if not exists idx_usage_events_request_id on usage_events(request_id)`,
 		`create index if not exists idx_usage_events_model on usage_events(model)`,
+		`create index if not exists idx_usage_events_model_timestamp on usage_events(model, timestamp_ms)`,
 		`create index if not exists idx_usage_events_auth_index on usage_events(auth_index)`,
+		`create index if not exists idx_usage_events_auth_index_timestamp on usage_events(auth_index, timestamp_ms)`,
 		`create index if not exists idx_usage_events_endpoint on usage_events(endpoint)`,
+		`create index if not exists idx_usage_events_api_key_hash_timestamp on usage_events(api_key_hash, timestamp_ms)`,
+		`create index if not exists idx_usage_events_source_hash_timestamp on usage_events(source_hash, timestamp_ms)`,
+		`create index if not exists idx_usage_events_failed_timestamp on usage_events(failed, timestamp_ms)`,
 		`create table if not exists dead_letter_events (
 			id integer primary key autoincrement,
 			payload text not null,

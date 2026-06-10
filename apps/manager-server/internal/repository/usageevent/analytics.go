@@ -939,7 +939,7 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 			return
 		}
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(normalized)), ",")
-		conditions = append(conditions, fmt.Sprintf("coalesce(%s, '') in (%s)", column, placeholders))
+		conditions = append(conditions, fmt.Sprintf("%s in (%s)", column, placeholders))
 		for _, value := range normalized {
 			args = append(args, value)
 		}

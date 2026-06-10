@@ -351,6 +351,12 @@ export interface UseMonitoringDataParams {
   scopeFilters?: MonitoringScopeFilters;
 }
 
+export interface MonitoringRefreshMetaOptions {
+  showLoading?: boolean;
+  forceAnalyticsRefresh?: boolean;
+  refreshMetadata?: boolean;
+}
+
 export interface UseMonitoringDataReturn {
   loading: boolean;
   error: string;
@@ -379,7 +385,7 @@ export interface UseMonitoringDataReturn {
   lastRefreshedAt: Date | null;
   isTransitioningScope: boolean;
   hasPresentationSnapshot: boolean;
-  refreshMeta: (showLoading?: boolean) => Promise<void>;
+  refreshMeta: (options?: MonitoringRefreshMetaOptions) => Promise<void>;
   loadMoreEvents: () => void;
 }
 

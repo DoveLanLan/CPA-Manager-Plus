@@ -26,6 +26,7 @@ vi.mock('./useMonitoringAnalytics', () => ({
   }),
 }));
 
+import { loadMonitoringMetaPayload } from '../services/monitoringMetaService';
 import { useMonitoringData } from './useMonitoringData';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -47,6 +48,7 @@ describe('useMonitoringData render stability', () => {
   afterEach(() => {
     renderer?.unmount();
     renderer = null;
+    vi.clearAllMocks();
   });
 
   it('settles while analytics events are still waiting for the first page', async () => {
@@ -78,5 +80,40 @@ describe('useMonitoringData render stability', () => {
     });
 
     expect(renderCount).toBeLessThan(10);
+  });
+
+  it('refreshes analytics without reloading metadata on lightweight refresh', async () => {
+    let hookResult: ReturnType<typeof useMonitoringData> | null = null;
+
+    function Harness() {
+      hookResult = useMonitoringData({
+        config: null,
+        modelPrices: EMPTY_MODEL_PRICES,
+        apiKeyAliases: EMPTY_API_KEY_ALIASES,
+        timeRange: 'today',
+        customTimeRange: null,
+        searchQuery: '',
+        searchApiKeyHash: '',
+        scopeFilters: ALL_SCOPE_FILTERS,
+      });
+      return null;
+    }
+
+    await act(async () => {
+      renderer = create(<Harness />);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    const metadataLoadCalls = vi.mocked(loadMonitoringMetaPayload).mock.calls.length;
+
+    await act(async () => {
+      await hookResult?.refreshMeta({
+        showLoading: false,
+        forceAnalyticsRefresh: false,
+        refreshMetadata: false,
+      });
+    });
+
+    expect(loadMonitoringMetaPayload).toHaveBeenCalledTimes(metadataLoadCalls);
   });
 });

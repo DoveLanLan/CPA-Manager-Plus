@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { MonitoringAnalyticsEventRow } from '@/services/api/usageService';
+import type {
+  MonitoringAnalyticsEventRow,
+  MonitoringAnalyticsFilterOptions,
+} from '@/services/api/usageService';
 import type { AuthFileItem } from '@/types/authFile';
 import type { CredentialInfo } from '@/types/sourceInfo';
 import { buildSourceInfoMap } from '@/utils/sourceResolver';
@@ -50,6 +53,7 @@ import type {
   MonitoringChannelMeta,
   MonitoringFilterOptions,
   MonitoringMetadata,
+  MonitoringRefreshMetaOptions,
   UseMonitoringDataParams,
   UseMonitoringDataReturn,
 } from '../model/types';
@@ -96,6 +100,9 @@ export {
 
 const MONITORING_EVENTS_PAGE_LIMIT = 500;
 const MONITORING_PRESENTATION_CACHE_LIMIT = 24;
+const MONITORING_FILTER_OPTIONS_CACHE_LIMIT = 24;
+const MONITORING_ANALYTICS_AUTO_REFRESH_BUCKET_MS = 30_000;
+const MONITORING_FILTER_OPTIONS_REFRESH_BUCKET_MS = 5 * 60_000;
 const EMPTY_MONITORING_ANALYTICS_EVENT_ROWS: MonitoringAnalyticsEventRow[] = [];
 
 interface MonitoringEventsPageState {
@@ -208,6 +215,35 @@ const uniqueOptionValues = (values: Array<string | null | undefined>) =>
     (left, right) => left.localeCompare(right)
   );
 
+const bucketMonitoringAnalyticsNowMs = (nowMs: number) =>
+  Math.floor(nowMs / MONITORING_ANALYTICS_AUTO_REFRESH_BUCKET_MS) *
+  MONITORING_ANALYTICS_AUTO_REFRESH_BUCKET_MS;
+
+const resolveMonitoringAnalyticsNowMs = (force: boolean, nowMs = Date.now()) =>
+  force ? nowMs : bucketMonitoringAnalyticsNowMs(nowMs);
+
+const buildMonitoringFilterOptionsBounds = (
+  bounds: { startMs: number; endMs: number } | null,
+  timeRange: UseMonitoringDataParams['timeRange']
+) => {
+  if (!bounds || timeRange === 'custom') return bounds;
+  const bucketedEndMs =
+    Math.floor(bounds.endMs / MONITORING_FILTER_OPTIONS_REFRESH_BUCKET_MS) *
+    MONITORING_FILTER_OPTIONS_REFRESH_BUCKET_MS;
+  return {
+    startMs: bounds.startMs,
+    endMs: bucketedEndMs > bounds.startMs ? bucketedEndMs : bounds.endMs,
+  };
+};
+
+const normalizeRefreshMetaOptions = (
+  options?: MonitoringRefreshMetaOptions
+): Required<MonitoringRefreshMetaOptions> => ({
+  showLoading: options?.showLoading ?? true,
+  forceAnalyticsRefresh: options?.forceAnalyticsRefresh ?? true,
+  refreshMetadata: options?.refreshMetadata ?? true,
+});
+
 export const resolveMonitoringDisplayEventItems = ({
   analyticsData,
   currentPageItems,
@@ -283,10 +319,15 @@ export function useMonitoringData({
   const [channels, setChannels] = useState<MonitoringChannelMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [analyticsNowMs, setAnalyticsNowMs] = useState(() => Date.now());
+  const [analyticsNowMs, setAnalyticsNowMs] = useState(() =>
+    resolveMonitoringAnalyticsNowMs(false)
+  );
   const [eventsPageState, setEventsPageState] = useState<MonitoringEventsPageState>(() =>
     createEventsPageState()
   );
+  const [filterOptionsCache, setFilterOptionsCache] = useState<
+    Map<string, MonitoringAnalyticsFilterOptions>
+  >(() => new Map());
   const [presentationSnapshotStore, setPresentationSnapshotStore] =
     useState<MonitoringPresentationSnapshotStore>(() => ({
       cachedSnapshots: new Map(),
@@ -303,23 +344,29 @@ export function useMonitoringData({
   }, [analyticsNowMs, customTimeRange, timeRange]);
 
   const refreshMeta = useCallback(
-    async (showLoading: boolean = true) => {
+    async (options?: MonitoringRefreshMetaOptions) => {
+      const { showLoading, forceAnalyticsRefresh, refreshMetadata } =
+        normalizeRefreshMetaOptions(options);
       if (showLoading) {
         setLoading(true);
         setError('');
       }
 
-      const payload = await loadMonitoringMetaPayload(config);
-      setAuthFiles(payload.authFiles);
-      setChannels(payload.channels);
-      setError(payload.error);
-      setLoading(false);
+      if (refreshMetadata) {
+        const payload = await loadMonitoringMetaPayload(config);
+        setAuthFiles(payload.authFiles);
+        setChannels(payload.channels);
+        setError(payload.error);
+        setLoading(false);
+      } else if (showLoading) {
+        setLoading(false);
+      }
       setEventsPageState((previous) =>
         previous.beforeMs === null && previous.beforeId === null && !previous.loadingMore
           ? previous
           : { ...previous, beforeMs: null, beforeId: null, loadingMore: false }
       );
-      setAnalyticsNowMs(Date.now());
+      setAnalyticsNowMs(resolveMonitoringAnalyticsNowMs(forceAnalyticsRefresh));
     },
     [config]
   );
@@ -403,6 +450,24 @@ export function useMonitoringData({
     () => (shouldUseHourlyTimeline(timeRange, customTimeRange) ? 'hour' : 'day'),
     [customTimeRange, timeRange]
   );
+  const filterOptionsBounds = useMemo(
+    () => buildMonitoringFilterOptionsBounds(analyticsBounds, timeRange),
+    [analyticsBounds, timeRange]
+  );
+
+  const filterOptionsScopeKey = useMemo(
+    () =>
+      JSON.stringify({
+        range: timeRange,
+        bounds: filterOptionsBounds,
+        searchQuery,
+        searchApiKeyHash,
+        granularity: analyticsGranularity,
+      }),
+    [filterOptionsBounds, analyticsGranularity, searchApiKeyHash, searchQuery, timeRange]
+  );
+  const cachedAnalyticsFilterOptions = filterOptionsCache.get(filterOptionsScopeKey);
+  const shouldLoadAnalyticsFilterOptions = !cachedAnalyticsFilterOptions;
 
   const eventsScopeKey = useMemo(
     () =>
@@ -455,7 +520,6 @@ export function useMonitoringData({
       failure_sources: true,
       account_stats: true,
       api_key_stats: true,
-      filter_options: true,
       task_buckets: true,
       recent_failures: 8,
       events_page: {
@@ -467,8 +531,23 @@ export function useMonitoringData({
     },
     throttleMs: 1_000,
   });
+  const filterOptionsAnalytics = useMonitoringAnalytics({
+    fromMs: shouldLoadAnalyticsFilterOptions ? filterOptionsBounds?.startMs : null,
+    toMs: shouldLoadAnalyticsFilterOptions ? filterOptionsBounds?.endMs : null,
+    nowMs: analyticsNowMs,
+    dataScopeKey: filterOptionsScopeKey,
+    searchQuery,
+    searchApiKeyHash,
+    include: {
+      filter_options: true,
+    },
+    throttleMs: 10_000,
+  });
   const analyticsData = analytics.data;
   const currentAnalyticsData = analytics.dataStale ? null : analyticsData;
+  const currentFilterOptionsData = filterOptionsAnalytics.dataStale
+    ? null
+    : filterOptionsAnalytics.data;
   const displayEventItems = useMemo(
     () =>
       resolveMonitoringDisplayEventItems({
@@ -488,8 +567,7 @@ export function useMonitoringData({
   );
   const displayEventsHasMore = currentAnalyticsData?.events?.has_more ?? eventsHasMore;
   const eventsLoadedCount = displayEventItems.length;
-  const displayEventsTotalCount =
-    currentAnalyticsData?.events?.total_count ?? eventsLoadedCount;
+  const displayEventsTotalCount = currentAnalyticsData?.events?.total_count ?? eventsLoadedCount;
 
   useEffect(() => {
     const page = currentAnalyticsData?.events;
@@ -524,6 +602,30 @@ export function useMonitoringData({
       cancelled = true;
     };
   }, [currentAnalyticsData?.events, eventsScopeKey, eventsBeforeMs, eventsBeforeId]);
+
+  useEffect(() => {
+    const options = currentFilterOptionsData?.filter_options;
+    if (!options) return;
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setFilterOptionsCache((previous) => {
+        if (previous.get(filterOptionsScopeKey) === options) return previous;
+        const next = new Map(previous);
+        next.set(filterOptionsScopeKey, options);
+        while (next.size > MONITORING_FILTER_OPTIONS_CACHE_LIMIT) {
+          const oldestKey = next.keys().next().value;
+          if (oldestKey === undefined) break;
+          next.delete(oldestKey);
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFilterOptionsData?.filter_options, filterOptionsScopeKey]);
 
   useEffect(() => {
     if (analytics.error) {
@@ -704,7 +806,14 @@ export function useMonitoringData({
             channelByAuthIndex
           )
         : buildAccountRows(filteredRows),
-    [currentAnalyticsData, authFileMap, authMetaMap, channelByAuthIndex, filteredRows, sourceInfoMap]
+    [
+      currentAnalyticsData,
+      authFileMap,
+      authMetaMap,
+      channelByAuthIndex,
+      filteredRows,
+      sourceInfoMap,
+    ]
   );
   const apiKeyRows = useMemo(
     () =>
@@ -738,7 +847,8 @@ export function useMonitoringData({
     }),
     [rangeFilteredRows]
   );
-  const analyticsFilterOptions = currentAnalyticsData?.filter_options;
+  const analyticsFilterOptions =
+    currentFilterOptionsData?.filter_options ?? cachedAnalyticsFilterOptions;
   const filterOptions = useMemo(
     () =>
       analyticsFilterOptions
@@ -757,6 +867,7 @@ export function useMonitoringData({
       authMetaMap,
       channelByAuthIndex,
       analyticsFilterOptions,
+      cachedAnalyticsFilterOptions,
       fallbackFilterOptions,
       sourceInfoMap,
     ]

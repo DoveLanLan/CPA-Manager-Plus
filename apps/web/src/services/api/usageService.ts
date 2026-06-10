@@ -772,6 +772,7 @@ export interface MonitoringAnalyticsResponse {
 }
 
 const USAGE_SERVICE_TIMEOUT_MS = 15 * 1000;
+const USAGE_SERVICE_ANALYTICS_TIMEOUT_MS = 30 * 1000;
 const USAGE_SERVICE_TRANSFER_TIMEOUT_MS = 60 * 1000;
 const CODEX_INSPECTION_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 export const USAGE_SERVICE_ID = 'cpa-manager-plus';
@@ -1231,7 +1232,7 @@ export const monitoringAnalyticsApi = {
         buildUrl(base, '/v0/management/monitoring/analytics'),
         request,
         {
-          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          timeout: USAGE_SERVICE_ANALYTICS_TIMEOUT_MS,
           headers: authHeaders(managementKey),
         }
       );

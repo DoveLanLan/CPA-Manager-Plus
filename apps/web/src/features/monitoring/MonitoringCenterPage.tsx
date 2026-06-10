@@ -122,6 +122,11 @@ const EMPTY_STATUS_BAR_DATA: StatusBarData = {
   totalFailure: 0,
 };
 
+type RefreshAllOptions = {
+  forceAnalyticsRefresh?: boolean;
+  refreshMetadata?: boolean;
+};
+
 const shortLabel = (t: TFunction, shortKey: string, fallbackKey: string) => {
   const fallback = t(fallbackKey);
   const label = t(shortKey, { defaultValue: fallback });
@@ -219,6 +224,7 @@ export function MonitoringCenterPage() {
   const previousAccountPageResetStateRef = useRef<AccountOverviewPageResetState | null>(null);
   const accountQuotaStatesRef = useRef<Record<string, AccountQuotaState>>({});
   const accountQuotaRequestIdsRef = useRef<Record<string, number>>({});
+  const refreshAllPromiseRef = useRef<Promise<void> | null>(null);
   const usageImportInputRef = useRef<HTMLInputElement | null>(null);
   const deferredSearch = useDeferredValue(searchInput);
   const deferredSearchApiKeyHash = useMemo(() => sha256Hex(deferredSearch), [deferredSearch]);
@@ -331,9 +337,37 @@ export function MonitoringCenterPage() {
     scopeFilters: monitoringScopeFilters,
   });
 
-  const refreshAll = useCallback(async () => {
-    await Promise.all([loadApiKeyAliases(), refreshMeta(false)]);
-  }, [loadApiKeyAliases, refreshMeta]);
+  const refreshAll = useCallback(
+    async (options: RefreshAllOptions = {}) => {
+      if (refreshAllPromiseRef.current) {
+        return refreshAllPromiseRef.current;
+      }
+
+      const refreshMetadata = options.refreshMetadata ?? true;
+      const refreshTasks: Array<Promise<unknown>> = [
+        refreshMeta({
+          showLoading: false,
+          forceAnalyticsRefresh: options.forceAnalyticsRefresh ?? true,
+          refreshMetadata,
+        }),
+      ];
+      if (refreshMetadata) {
+        refreshTasks.unshift(loadApiKeyAliases());
+      }
+
+      const promise = Promise.all(refreshTasks).then(() => undefined);
+
+      refreshAllPromiseRef.current = promise;
+      try {
+        return await promise;
+      } finally {
+        if (refreshAllPromiseRef.current === promise) {
+          refreshAllPromiseRef.current = null;
+        }
+      }
+    },
+    [loadApiKeyAliases, refreshMeta]
+  );
 
   const setCurrentAccountPage = useCallback(
     (page: number) => {
@@ -352,7 +386,7 @@ export function MonitoringCenterPage() {
   useHeaderRefresh(refreshAll, isCurrentLayer);
   useInterval(
     () => {
-      void refreshAll().catch(() => {});
+      void refreshAll({ forceAnalyticsRefresh: false, refreshMetadata: false }).catch(() => {});
     },
     isCurrentLayer && connectionStatus === 'connected' && Number(autoRefreshMs) > 0
       ? Number(autoRefreshMs)
