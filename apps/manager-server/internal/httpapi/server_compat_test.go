@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -503,16 +504,6 @@ func TestServerCompatProxyRoutes(t *testing.T) {
 		t.Fatalf("reload proxy request = %#v", reloadReq)
 	}
 
-	configRR := testutil.Request(t, handler, http.MethodGet, "/config", "", testutil.AdminKey)
-	testutil.RequireStatus(t, configRR, http.StatusOK)
-	configReq, ok := cpa.LastRequest("/config")
-	if !ok {
-		t.Fatal("CPA mock did not receive /config")
-	}
-	if configReq.Authorization != "Bearer management-key" {
-		t.Fatalf("config proxy request = %#v", configReq)
-	}
-
 	modelsReq := httptest.NewRequest(http.MethodGet, "/v1/models?limit=20", nil)
 	modelsReq.Header.Set("Authorization", "Bearer upstream-key")
 	modelsRR := httptest.NewRecorder()
@@ -525,6 +516,233 @@ func TestServerCompatProxyRoutes(t *testing.T) {
 	if modelsProxyReq.Authorization != "Bearer upstream-key" || modelsProxyReq.Query != "limit=20" {
 		t.Fatalf("model list proxy request = %#v", modelsProxyReq)
 	}
+}
+
+func TestServerCompatPluginProxyRoutes(t *testing.T) {
+	type observedRequest struct {
+		method            string
+		path              string
+		query             string
+		authorization     string
+		codexInviteOrigin string
+		origin            string
+		body              string
+	}
+
+	observed := make(chan observedRequest, 9)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		observed <- observedRequest{
+			method:            r.Method,
+			path:              r.URL.Path,
+			query:             r.URL.RawQuery,
+			authorization:     r.Header.Get("Authorization"),
+			codexInviteOrigin: r.Header.Get("X-Codex-Invite-Origin"),
+			origin:            r.Header.Get("Origin"),
+			body:              string(body),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	setup := &store.Setup{
+		CPAUpstreamURL: upstream.URL,
+		ManagementKey:  "management-key",
+		Queue:          "usage",
+		PopSide:        "right",
+	}
+	handler, _ := newCompatHandler(t, testutil.NewConfig(t), setup)
+
+	assertObserved := func(path string, want observedRequest) {
+		t.Helper()
+		select {
+		case got := <-observed:
+			if got != want {
+				t.Fatalf("%s proxy request = %#v, want %#v", path, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("CPA upstream did not receive %s", path)
+		}
+	}
+	requestWithHeaders := func(method, target, body, managementKey string, headers map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, target, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if managementKey != "" {
+			req.Header.Set("Authorization", "Bearer "+managementKey)
+		}
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	managementInstallRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPost,
+		"/v0/management/plugin-store/demo/install?source=official",
+		"",
+		testutil.AdminKey,
+	)
+	testutil.RequireStatus(t, managementInstallRR, http.StatusOK)
+	assertObserved("/v0/management/plugin-store/demo/install", observedRequest{
+		method:        http.MethodPost,
+		path:          "/v0/management/plugin-store/demo/install",
+		query:         "source=official",
+		authorization: "Bearer management-key",
+	})
+
+	pluginManagementRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPatch,
+		"/v0/management/plugins/demo/custom?mode=full",
+		`{"refresh":true}`,
+		testutil.AdminKey,
+	)
+	testutil.RequireStatus(t, pluginManagementRR, http.StatusOK)
+	assertObserved("/v0/management/plugins/demo/custom", observedRequest{
+		method:        http.MethodPatch,
+		path:          "/v0/management/plugins/demo/custom",
+		query:         "mode=full",
+		authorization: "Bearer management-key",
+		body:          `{"refresh":true}`,
+	})
+
+	pluginDynamicManagementRR := requestWithHeaders(
+		http.MethodGet,
+		"/v0/management/codex-invite/accounts",
+		"",
+		"plugin-management-key",
+		map[string]string{
+			"Origin":                "http://localhost:18317",
+			"X-Codex-Invite-Origin": "http://localhost:18317",
+		},
+	)
+	testutil.RequireStatus(t, pluginDynamicManagementRR, http.StatusOK)
+	assertObserved("/v0/management/codex-invite/accounts", observedRequest{
+		method:            http.MethodGet,
+		path:              "/v0/management/codex-invite/accounts",
+		authorization:     "Bearer plugin-management-key",
+		codexInviteOrigin: upstream.URL,
+		origin:            "http://localhost:18317",
+	})
+
+	pluginDynamicInviteRR := requestWithHeaders(
+		http.MethodPost,
+		"/v0/management/codex-invite/invite",
+		`{"management_origin":"http://localhost:18317","refresh":true}`,
+		"plugin-management-key",
+		map[string]string{
+			"Content-Type":          "application/json",
+			"X-Codex-Invite-Origin": "http://localhost:18317",
+		},
+	)
+	testutil.RequireStatus(t, pluginDynamicInviteRR, http.StatusOK)
+	assertObserved("/v0/management/codex-invite/invite", observedRequest{
+		method:            http.MethodPost,
+		path:              "/v0/management/codex-invite/invite",
+		authorization:     "Bearer plugin-management-key",
+		codexInviteOrigin: upstream.URL,
+		body:              `{"management_origin":"` + upstream.URL + `","refresh":true}`,
+	})
+
+	resourcePostNoAuthRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPost,
+		"/v0/resource/plugins/codex-invite/invite",
+		`{"managementKey":"plugin-key"}`,
+		"",
+	)
+	testutil.RequireStatus(t, resourcePostNoAuthRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method: http.MethodPost,
+		path:   "/v0/resource/plugins/codex-invite/invite",
+		body:   `{"managementKey":"plugin-key"}`,
+	})
+
+	resourcePostCallerAuthRR := requestWithHeaders(
+		http.MethodPost,
+		"/v0/resource/plugins/codex-invite/invite",
+		`{"refresh":true}`,
+		"plugin-management-key",
+		map[string]string{
+			"X-Codex-Invite-Origin": "http://localhost:18317",
+		},
+	)
+	testutil.RequireStatus(t, resourcePostCallerAuthRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:            http.MethodPost,
+		path:              "/v0/resource/plugins/codex-invite/invite",
+		authorization:     "Bearer plugin-management-key",
+		codexInviteOrigin: upstream.URL,
+		body:              `{"refresh":true}`,
+	})
+
+	resourcePostRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPost,
+		"/v0/resource/plugins/codex-invite/invite",
+		`{"refresh":true}`,
+		testutil.AdminKey,
+	)
+	testutil.RequireStatus(t, resourcePostRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:        http.MethodPost,
+		path:          "/v0/resource/plugins/codex-invite/invite",
+		authorization: "Bearer management-key",
+		body:          `{"refresh":true}`,
+	})
+
+	resourcePutRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPut,
+		"/v0/resource/plugins/codex-invite/invite",
+		`{"key":"value"}`,
+		testutil.AdminKey,
+	)
+	testutil.RequireStatus(t, resourcePutRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:        http.MethodPut,
+		path:          "/v0/resource/plugins/codex-invite/invite",
+		authorization: "Bearer management-key",
+		body:          `{"key":"value"}`,
+	})
+
+	resourceTraceRR := testutil.Request(
+		t,
+		handler,
+		http.MethodTrace,
+		"/v0/resource/plugins/codex-invite/invite",
+		"",
+		"",
+	)
+	testutil.RequireStatus(t, resourceTraceRR, http.StatusMethodNotAllowed)
+
+	resourceRR := requestWithHeaders(
+		http.MethodGet,
+		"/v0/resource/plugins/codex-invite/invite",
+		"",
+		"",
+		map[string]string{
+			"X-Codex-Invite-Origin": "http://localhost:18317",
+		},
+	)
+	testutil.RequireStatus(t, resourceRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:            http.MethodGet,
+		path:              "/v0/resource/plugins/codex-invite/invite",
+		authorization:     "Bearer management-key",
+		codexInviteOrigin: upstream.URL,
+	})
 }
 
 func compatEvent(hash string, offset int64) usage.Event {

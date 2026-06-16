@@ -20,6 +20,7 @@ import {
   IconSidebarLogs,
   IconSidebarMonitor,
   IconSidebarOauth,
+  IconSidebarPlugins,
   IconSidebarProviders,
   IconSidebarQuota,
   IconSidebarSystem,
@@ -33,6 +34,15 @@ import {
   useNotificationStore,
   useThemeStore,
 } from '@/stores';
+import { pluginsApi } from '@/services/api';
+import {
+  collectPluginResourceEntries,
+  isPluginManagementNavVisible,
+  isPluginResourceNavVisible,
+  PLUGIN_RESOURCES_REFRESH_EVENT,
+  resolvePluginAssetURL,
+  type PluginResourceEntry,
+} from '@/features/plugins/pluginResources';
 import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { isFileLogsAvailable } from '@/features/logs/logFeatureAvailability';
@@ -51,6 +61,7 @@ const sidebarIcons: Record<string, ReactNode> = {
   usageAnalytics: <IconSidebarUsage size={SIDEBAR_ICON_SIZE} />,
   codexInspection: <IconSidebarInspection size={SIDEBAR_ICON_SIZE} />,
   monitoring: <IconSidebarMonitor size={SIDEBAR_ICON_SIZE} />,
+  plugins: <IconSidebarPlugins size={SIDEBAR_ICON_SIZE} />,
   config: <IconSidebarConfig size={SIDEBAR_ICON_SIZE} />,
   logs: <IconSidebarLogs size={SIDEBAR_ICON_SIZE} />,
   system: <IconSidebarSystem size={SIDEBAR_ICON_SIZE} />,
@@ -159,6 +170,17 @@ const THEME_OPTIONS: Array<{
   { key: 'dark', labelKey: 'theme.dark', icon: headerIcons.moon },
 ];
 
+function PluginSidebarIcon({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false);
+  const showImage = Boolean(src) && !failed;
+
+  return showImage ? (
+    <img src={src} alt="" onError={() => setFailed(true)} />
+  ) : (
+    <IconSidebarPlugins size={SIDEBAR_ICON_SIZE} />
+  );
+}
+
 type NavItem = {
   path: string;
   label: string;
@@ -173,6 +195,9 @@ export function MainLayout() {
   const location = useLocation();
 
   const logout = useAuthStore((state) => state.logout);
+  const connectionStatus = useAuthStore((state) => state.connectionStatus);
+  const apiBase = useAuthStore((state) => state.apiBase);
+  const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
 
   const config = useConfigStore((state) => state.config);
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
@@ -194,6 +219,7 @@ export function MainLayout() {
   });
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [pluginResources, setPluginResources] = useState<PluginResourceEntry[]>([]);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const languageMenuRef = useRef<HTMLDivElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
@@ -202,7 +228,10 @@ export function MainLayout() {
   const fullBrandName = 'CPA Manager Plus';
   const abbrBrandName = t('title.abbr');
   const isLogsPage = location.pathname.startsWith('/logs');
+  const isPluginResourcePage = location.pathname.startsWith('/plugin-pages');
   const showSidebarLabels = !sidebarCollapsed || sidebarOpen;
+  const pluginControlMenuVisible = isPluginManagementNavVisible({ supportsPlugin });
+  const configPluginsEnabled = config?.pluginsEnabled;
 
   // 将顶部悬浮控制区高度写入 CSS 变量，供移动端粘性元素和浮层避让。
   useLayoutEffect(() => {
@@ -352,6 +381,40 @@ export function MainLayout() {
     });
   }, [fetchConfig]);
 
+  const loadPluginResources = useCallback(async () => {
+    if (connectionStatus !== 'connected' || !supportsPlugin) {
+      setPluginResources([]);
+      return;
+    }
+
+    try {
+      const plugins = await pluginsApi.list();
+      setPluginResources(
+        isPluginResourceNavVisible({
+          supportsPlugin,
+          pluginsEnabled: plugins.pluginsEnabled,
+        })
+          ? collectPluginResourceEntries(plugins.plugins)
+          : []
+      );
+    } catch {
+      setPluginResources([]);
+    }
+  }, [connectionStatus, supportsPlugin]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadPluginResources();
+    }, 0);
+
+    window.addEventListener(PLUGIN_RESOURCES_REFRESH_EVENT, loadPluginResources);
+
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener(PLUGIN_RESOURCES_REFRESH_EVENT, loadPluginResources);
+    };
+  }, [apiBase, configPluginsEnabled, loadPluginResources]);
+
   const fileLogsAvailable = isFileLogsAvailable(config);
   const navShortLabel = (key: string, fallback: string) => {
     const shortKey = `${key}_short`;
@@ -391,6 +454,26 @@ export function MainLayout() {
         ]
       : []),
   ];
+  const pluginControlNavItems: NavItem[] = pluginControlMenuVisible
+    ? [
+        {
+          path: '/plugins',
+          label: t('nav.plugins'),
+          shortLabel: navShortLabel('nav.plugins', t('nav.plugins')),
+          icon: sidebarIcons.plugins,
+        },
+      ]
+    : [];
+  const pluginResourceNavItems: NavItem[] = pluginControlMenuVisible
+    ? pluginResources.map((resource) => ({
+        path: resource.route,
+        label: resource.label,
+        shortLabel: resource.label,
+        icon: (
+          <PluginSidebarIcon src={resolvePluginAssetURL(resource.pluginLogo, apiBase)} />
+        ),
+      }))
+    : [];
   const navSections: NavItem[][] = [
     [
       dashboardNavItem,
@@ -410,6 +493,7 @@ export function MainLayout() {
         shortLabel: navShortLabel('nav.ai_providers', t('nav.ai_providers')),
         icon: sidebarIcons.aiProviders,
       },
+      ...pluginControlNavItems,
     ],
     [
       {
@@ -438,6 +522,7 @@ export function MainLayout() {
       },
     ],
     operationNavItems,
+    pluginResourceNavItems,
     [
       {
         path: '/system',
@@ -462,7 +547,6 @@ export function MainLayout() {
         if (normalizedPath.startsWith('/ai-providers/codex')) return aiProvidersIndex + 0.2;
         if (normalizedPath.startsWith('/ai-providers/claude')) return aiProvidersIndex + 0.3;
         if (normalizedPath.startsWith('/ai-providers/vertex')) return aiProvidersIndex + 0.4;
-        if (normalizedPath.startsWith('/ai-providers/ampcode')) return aiProvidersIndex + 0.5;
         if (normalizedPath.startsWith('/ai-providers/openai')) return aiProvidersIndex + 0.6;
         return aiProvidersIndex + 0.05;
       }
@@ -508,6 +592,7 @@ export function MainLayout() {
     clearCache();
     const results = await Promise.allSettled([
       fetchConfig(undefined, true),
+      loadPluginResources(),
       triggerHeaderRefresh(),
     ]);
     const rejected = results.find((result) => result.status === 'rejected');
@@ -542,7 +627,15 @@ export function MainLayout() {
   const currentRouteLabel = activeNavItem?.label ?? fullBrandName;
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
+    <div
+      className={[
+        'app-shell',
+        sidebarCollapsed ? 'sidebar-is-collapsed' : '',
+        isPluginResourcePage ? 'plugin-resource-shell' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
       <header className="main-header" ref={headerRef}>
         <div className="navbar">
           <div className="navbar-left">
@@ -734,8 +827,25 @@ export function MainLayout() {
           </div>
         </aside>
 
-        <div className={`content${isLogsPage ? ' content-logs' : ''}`} ref={contentRef}>
-          <main className={`main-content${isLogsPage ? ' main-content-logs' : ''}`}>
+        <div
+          className={[
+            'content',
+            isLogsPage ? 'content-logs' : '',
+            isPluginResourcePage ? 'content-plugin-resource' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          ref={contentRef}
+        >
+          <main
+            className={[
+              'main-content',
+              isLogsPage ? 'main-content-logs' : '',
+              isPluginResourcePage ? 'main-content-plugin-resource' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
             <PageTransition
               render={(location) => <MainRoutes location={location} />}
               getRouteOrder={getRouteOrder}

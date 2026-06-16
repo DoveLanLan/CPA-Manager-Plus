@@ -8,11 +8,11 @@ export const CONFIG_SECTION_KEYS: RawConfigSection[] = [
   'request-log',
   'logging-to-file',
   'logs-max-total-size-mb',
+  'plugins',
   'ws-auth',
   'force-model-prefix',
   'routing/strategy',
   'api-keys',
-  'ampcode',
   'gemini-api-key',
   'codex-api-key',
   'claude-api-key',
@@ -41,6 +41,10 @@ export const extractConfigSectionValue = (
       return config.loggingToFile;
     case 'logs-max-total-size-mb':
       return config.logsMaxTotalSizeMb;
+    case 'plugins':
+      return config.pluginsEnabled === undefined
+        ? config.raw?.plugins
+        : { enabled: config.pluginsEnabled };
     case 'ws-auth':
       return config.wsAuth;
     case 'force-model-prefix':
@@ -49,8 +53,6 @@ export const extractConfigSectionValue = (
       return config.routingStrategy;
     case 'api-keys':
       return config.apiKeys;
-    case 'ampcode':
-      return config.ampcode;
     case 'gemini-api-key':
       return config.geminiApiKeys;
     case 'codex-api-key':

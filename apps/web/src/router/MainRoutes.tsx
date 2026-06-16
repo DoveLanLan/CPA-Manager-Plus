@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { Navigate, useLocation, useRoutes, type Location } from 'react-router-dom';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { AiProvidersPage } from '@/pages/AiProvidersPage';
-import { AiProvidersAmpcodeEditPage } from '@/pages/AiProvidersAmpcodeEditPage';
 import { AiProvidersClaudeEditLayout } from '@/pages/AiProvidersClaudeEditLayout';
 import { AiProvidersClaudeEditPage } from '@/pages/AiProvidersClaudeEditPage';
 import { AiProvidersClaudeModelsPage } from '@/pages/AiProvidersClaudeModelsPage';
@@ -25,15 +24,25 @@ import { CodexInspectionPage } from '@/pages/CodexInspectionPage';
 import { ServerCodexInspectionPage } from '@/pages/ServerCodexInspectionPage';
 import { ConfigPage } from '@/pages/ConfigPage';
 import { LogsPage } from '@/pages/LogsPage';
+import { PluginResourcePage } from '@/pages/PluginResourcePage';
+import { PluginsPage } from '@/pages/PluginsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { isLogsRouteAvailable } from '@/features/logs/logFeatureAvailability';
-import { useConfigStore } from '@/stores';
+import { useAuthStore, useConfigStore } from '@/stores';
 import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
 type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection';
+
+function PluginGate({ children }: { children: ReactElement }) {
+  const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
+  if (!supportsPlugin) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
 
 function FeatureGate({
   feature,
@@ -173,7 +182,6 @@ const mainRoutes = [
       { path: 'models', element: <AiProvidersOpenAIModelsPage /> },
     ],
   },
-  { path: '/ai-providers/ampcode', element: <AiProvidersAmpcodeEditPage /> },
   { path: '/ai-providers', element: <AiProvidersPage /> },
   { path: '/ai-providers/*', element: <AiProvidersPage /> },
   { path: '/auth-files', element: <AuthFilesPage /> },
@@ -242,6 +250,33 @@ const mainRoutes = [
       </FeatureGate>
     ),
   },
+  {
+    path: '/plugins',
+    element: (
+      <PluginGate>
+        <PluginsPage />
+      </PluginGate>
+    ),
+  },
+  {
+    path: '/plugin-store',
+    element: (
+      <PluginGate>
+        <Navigate to="/plugins?tab=store" replace />
+      </PluginGate>
+    ),
+  },
+  {
+    path: '/plugin-pages/:pluginId/:menuIndex',
+    element: (
+      <PluginGate>
+        <PluginResourcePage />
+      </PluginGate>
+    ),
+  },
+  { path: '/plugins/*', element: <Navigate to="/plugins" replace /> },
+  { path: '/plugin-store/*', element: <Navigate to="/plugins?tab=store" replace /> },
+  { path: '/plugin-pages/*', element: <Navigate to="/" replace /> },
   { path: '/config', element: <ConfigPage /> },
   {
     path: '/logs',
