@@ -24,6 +24,7 @@ const USAGE_SERVICE_ERROR_CODES = new Set([
   'api_key_alias_duplicate',
   'model_price_sync_failed',
   'method_not_allowed',
+  'account_processing_policy_env_locked',
 ]);
 
 export interface UsageServiceApiError extends Error {
@@ -68,7 +69,7 @@ export interface UsageServiceStatus {
   collector?: UsageServiceCollectorStatus;
 }
 
-export interface AutomationCapability {
+export interface AccountPolicyCapability {
   enabled: boolean;
   configured?: boolean;
   source?: string;
@@ -78,18 +79,18 @@ export interface AutomationCapability {
   dependsOn?: string;
 }
 
-export interface AutomationStatus {
+export interface AccountProcessingPolicy {
   source: string;
   updatedAtMs?: number;
-  quotaCooldown: AutomationCapability;
-  accountActions: AutomationCapability;
-  accountActionsAutoDisable: AutomationCapability;
+  codexQuotaCooldown: AccountPolicyCapability;
+  authIssueQueue: AccountPolicyCapability;
+  authIssueAutoDisable: AccountPolicyCapability;
 }
 
-export interface AutomationSettingsPatch {
-  quotaCooldownEnabled?: boolean;
-  accountActionsEnabled?: boolean;
-  accountActionsAutoDisable?: boolean;
+export interface AccountProcessingPolicyPatch {
+  codexQuotaCooldownEnabled?: boolean;
+  authIssueQueueEnabled?: boolean;
+  authIssueAutoDisableEnabled?: boolean;
 }
 
 export interface UsageServiceSetupRequest {
@@ -1093,10 +1094,10 @@ export const usageServiceApi = {
     });
   },
 
-  getAutomationStatus: async (base: string, managementKey?: string): Promise<AutomationStatus> => {
+  getAccountProcessingPolicy: async (base: string, managementKey?: string): Promise<AccountProcessingPolicy> => {
     return withUsageServiceError(async () => {
-      const response = await axios.get<AutomationStatus>(
-        buildUrl(base, '/usage-service/automation'),
+      const response = await axios.get<AccountProcessingPolicy>(
+        buildUrl(base, '/usage-service/account-processing-policy'),
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
@@ -1106,14 +1107,14 @@ export const usageServiceApi = {
     });
   },
 
-  updateAutomationSettings: async (
+  updateAccountProcessingPolicy: async (
     base: string,
     managementKey: string,
-    patch: AutomationSettingsPatch
-  ): Promise<AutomationStatus> => {
+    patch: AccountProcessingPolicyPatch
+  ): Promise<AccountProcessingPolicy> => {
     return withUsageServiceError(async () => {
-      const response = await axios.patch<AutomationStatus>(
-        buildUrl(base, '/usage-service/automation'),
+      const response = await axios.patch<AccountProcessingPolicy>(
+        buildUrl(base, '/usage-service/account-processing-policy'),
         patch,
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,

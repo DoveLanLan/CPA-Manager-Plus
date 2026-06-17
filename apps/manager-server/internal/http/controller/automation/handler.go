@@ -29,7 +29,12 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 		if !h.authorizeRead(w, r) {
 			return
 		}
-		response.JSON(w, http.StatusOK, h.service.Status(r.Context()))
+		status, err := h.service.Status(r.Context())
+		if err != nil {
+			response.Error(w, http.StatusInternalServerError, err)
+			return
+		}
+		response.JSON(w, http.StatusOK, status)
 	case http.MethodPatch:
 		if !h.authorizeWrite(w, r) {
 			return

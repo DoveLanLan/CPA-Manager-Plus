@@ -3,6 +3,8 @@ package automation
 import (
 	"context"
 	"errors"
+	"log"
+	"sync"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -13,6 +15,13 @@ const (
 	SourceEnv     = "env"
 	SourceDB      = "database"
 )
+
+// settingsStore is the subset of *store.Store used by the service. It is an
+// interface so tests can inject failing loaders to exercise error handling.
+type settingsStore interface {
+	LoadAutomationSettings(ctx context.Context) (store.AutomationSettings, bool, error)
+	SaveAutomationSettings(ctx context.Context, settings store.AutomationSettings) error
+}
 
 type Capability struct {
 	Enabled       bool   `json:"enabled"`
@@ -27,37 +36,43 @@ type Capability struct {
 type Status struct {
 	Source                    string     `json:"source"`
 	UpdatedAtMS               int64      `json:"updatedAtMs,omitempty"`
-	QuotaCooldown             Capability `json:"quotaCooldown"`
-	AccountActions            Capability `json:"accountActions"`
-	AccountActionsAutoDisable Capability `json:"accountActionsAutoDisable"`
+	QuotaCooldown             Capability `json:"codexQuotaCooldown"`
+	AccountActions            Capability `json:"authIssueQueue"`
+	AccountActionsAutoDisable Capability `json:"authIssueAutoDisable"`
 }
 
 type UpdateRequest struct {
-	QuotaCooldownEnabled      *bool `json:"quotaCooldownEnabled,omitempty"`
-	AccountActionsEnabled     *bool `json:"accountActionsEnabled,omitempty"`
-	AccountActionsAutoDisable *bool `json:"accountActionsAutoDisable,omitempty"`
+	QuotaCooldownEnabled      *bool `json:"codexQuotaCooldownEnabled,omitempty"`
+	AccountActionsEnabled     *bool `json:"authIssueQueueEnabled,omitempty"`
+	AccountActionsAutoDisable *bool `json:"authIssueAutoDisableEnabled,omitempty"`
 }
 
 type Service struct {
 	cfg   config.Config
-	store *store.Store
+	store settingsStore
+
+	mu        sync.RWMutex
+	lastKnown store.AutomationSettings
+	hasKnown  bool
 }
 
 func New(cfg config.Config, st ...*store.Store) *Service {
-	var storeRef *store.Store
+	var storeRef settingsStore
 	if len(st) > 0 {
 		storeRef = st[0]
 	}
 	return &Service{cfg: cfg, store: storeRef}
 }
 
-func (s *Service) Status(ctx ...context.Context) Status {
-	requestCtx := context.Background()
-	if len(ctx) > 0 && ctx[0] != nil {
-		requestCtx = ctx[0]
+// Status returns the effective account-processing policy. Unlike the runtime
+// gating path, a read failure is surfaced to the caller so the UI does not
+// silently show a stale/default state.
+func (s *Service) Status(ctx context.Context) (Status, error) {
+	settings, _, err := s.loadSettings(ctx)
+	if err != nil {
+		return Status{}, err
 	}
-	settings, _, _ := s.loadSettings(requestCtx)
-	return s.statusFromSettings(settings)
+	return s.statusFromSettings(settings), nil
 }
 
 func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error) {
@@ -96,14 +111,27 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error)
 	return s.statusFromSettings(saved), nil
 }
 
+// RuntimeSettings returns the effective booleans used to gate runtime workers.
+// It never blocks the collector loop on a read failure: it logs the error and
+// keeps the last known-good configuration (or startup defaults before the first
+// successful load).
 func (s *Service) RuntimeSettings(ctx context.Context) RuntimeSettings {
-	settings, _, _ := s.loadSettings(ctx)
-	status := s.statusFromSettings(settings)
-	return RuntimeSettings{
-		QuotaCooldownEnabled:      status.QuotaCooldown.Enabled,
-		AccountActionsEnabled:     status.AccountActions.Enabled,
-		AccountActionsAutoDisable: status.AccountActionsAutoDisable.Enabled,
+	settings, _, err := s.loadSettings(ctx)
+	if err != nil {
+		log.Printf("[account-processing-policy] failed to load runtime settings: %v; using last known configuration", err)
+		s.mu.RLock()
+		cached, hasCached := s.lastKnown, s.hasKnown
+		s.mu.RUnlock()
+		if hasCached {
+			return s.runtimeFromSettings(cached)
+		}
+		return s.runtimeFromSettings(store.AutomationSettings{})
 	}
+	s.mu.Lock()
+	s.lastKnown = settings
+	s.hasKnown = true
+	s.mu.Unlock()
+	return s.runtimeFromSettings(settings)
 }
 
 type RuntimeSettings struct {
@@ -119,40 +147,73 @@ func (s *Service) loadSettings(ctx context.Context) (store.AutomationSettings, b
 	return s.store.LoadAutomationSettings(ctx)
 }
 
-func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
+type resolved struct {
+	quotaValue, quotaLocked     bool
+	quotaSource                 string
+	accountValue, accountLocked bool
+	accountSource               string
+	autoConfigured, autoLocked  bool
+	autoSource                  string
+}
+
+func (s *Service) resolve(settings store.AutomationSettings) resolved {
 	quotaValue, quotaSource, quotaLocked := s.resolveField(settings.QuotaCooldownEnabled, s.cfg.QuotaCooldownEnabled, s.cfg.QuotaCooldownEnvSet)
-	accountActionsValue, accountActionsSource, accountActionsLocked := s.resolveField(settings.AccountActionsEnabled, s.cfg.AccountActionsEnabled, s.cfg.AccountActionsEnvSet)
+	accountValue, accountSource, accountLocked := s.resolveField(settings.AccountActionsEnabled, s.cfg.AccountActionsEnabled, s.cfg.AccountActionsEnvSet)
 	autoConfigured, autoSource, autoLocked := s.resolveField(settings.AccountActionsAutoDisable, s.cfg.AccountActionsAutoDisable, s.cfg.AccountActionsAutoEnvSet)
-	autoEffective := accountActionsValue && autoConfigured
+	return resolved{
+		quotaValue:     quotaValue,
+		quotaSource:    quotaSource,
+		quotaLocked:    quotaLocked,
+		accountValue:   accountValue,
+		accountSource:  accountSource,
+		accountLocked:  accountLocked,
+		autoConfigured: autoConfigured,
+		autoSource:     autoSource,
+		autoLocked:     autoLocked,
+	}
+}
+
+func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
+	r := s.resolve(settings)
+	autoEffective := r.accountValue && r.autoConfigured
 
 	return Status{
-		Source:      overallSource(quotaSource, accountActionsSource, autoSource),
+		Source:      overallSource(r.quotaSource, r.accountSource, r.autoSource),
 		UpdatedAtMS: settings.UpdatedAtMS,
 		QuotaCooldown: Capability{
-			Enabled:       quotaValue,
-			Configured:    quotaValue,
-			Source:        quotaSource,
-			Locked:        quotaLocked,
+			Enabled:       r.quotaValue,
+			Configured:    r.quotaValue,
+			Source:        r.quotaSource,
+			Locked:        r.quotaLocked,
 			EnvKey:        "USAGE_QUOTA_COOLDOWN_ENABLED",
 			ConfigFileKey: "quotaCooldownEnabled",
 		},
 		AccountActions: Capability{
-			Enabled:       accountActionsValue,
-			Configured:    accountActionsValue,
-			Source:        accountActionsSource,
-			Locked:        accountActionsLocked,
+			Enabled:       r.accountValue,
+			Configured:    r.accountValue,
+			Source:        r.accountSource,
+			Locked:        r.accountLocked,
 			EnvKey:        "USAGE_ACCOUNT_ACTIONS_ENABLED",
 			ConfigFileKey: "accountActionsEnabled",
 		},
 		AccountActionsAutoDisable: Capability{
 			Enabled:       autoEffective,
-			Configured:    autoConfigured,
-			Source:        autoSource,
-			Locked:        autoLocked,
+			Configured:    r.autoConfigured,
+			Source:        r.autoSource,
+			Locked:        r.autoLocked,
 			EnvKey:        "USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE",
 			ConfigFileKey: "accountActionsAutoDisable",
-			DependsOn:     "accountActions",
+			DependsOn:     "authIssueQueue",
 		},
+	}
+}
+
+func (s *Service) runtimeFromSettings(settings store.AutomationSettings) RuntimeSettings {
+	r := s.resolve(settings)
+	return RuntimeSettings{
+		QuotaCooldownEnabled:      r.quotaValue,
+		AccountActionsEnabled:     r.accountValue,
+		AccountActionsAutoDisable: r.accountValue && r.autoConfigured,
 	}
 }
 

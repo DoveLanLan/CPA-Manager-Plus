@@ -10,7 +10,7 @@ import (
 
 func TestWriteCORSAllowsPatch(t *testing.T) {
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("OPTIONS", "/usage-service/automation", nil)
+	req := httptest.NewRequest("OPTIONS", "/usage-service/account-processing-policy", nil)
 	WriteCORS(config.Config{CORSOrigins: []string{"*"}}, rr, req)
 
 	methods := rr.Header().Get("Access-Control-Allow-Methods")

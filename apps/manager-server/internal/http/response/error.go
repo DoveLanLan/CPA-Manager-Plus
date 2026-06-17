@@ -69,7 +69,7 @@ func UsageServiceErrorCode(err error) string {
 	case strings.Contains(message, "connection setup is managed by environment variables"):
 		return "connection_env_managed"
 	case strings.Contains(message, "locked by environment variable"):
-		return "automation_setting_env_locked"
+		return "account_processing_policy_env_locked"
 	case strings.Contains(message, "CPA connection is already bound"):
 		return "cpa_connection_already_bound"
 	case strings.Contains(message, "cpaBaseUrl and managementKey are required when request monitoring is enabled"):
