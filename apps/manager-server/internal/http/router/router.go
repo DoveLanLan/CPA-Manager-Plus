@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/app"
+	accountactioncontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/accountaction"
 	apikeyaliascontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/apikeyalias"
+	automationcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/automation"
 	codexinspectioncontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/codexinspection"
 	dashboardcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/dashboard"
 	healthcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/health"
@@ -14,6 +16,7 @@ import (
 	monitoringcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/monitoring"
 	panelcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/panel"
 	proxycontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/proxy"
+	quotacooldowncontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/quotacooldown"
 	setupcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/setup"
 	systemcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/system"
 	usagecontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/usage"
@@ -29,6 +32,9 @@ func New(appCtx *app.Context) http.Handler {
 	usageHandler := &usagecontroller.Handler{App: appCtx}
 	modelPriceHandler := &modelpricecontroller.Handler{App: appCtx}
 	apiKeyAliasHandler := &apikeyaliascontroller.Handler{App: appCtx}
+	accountActionHandler := &accountactioncontroller.Handler{App: appCtx}
+	automationHandler := automationcontroller.New(appCtx)
+	quotaCooldownHandler := &quotacooldowncontroller.Handler{App: appCtx}
 	codexInspectionHandler := &codexinspectioncontroller.Handler{App: appCtx}
 	dashboardHandler := &dashboardcontroller.Handler{App: appCtx}
 	monitoringHandler := &monitoringcontroller.Handler{App: appCtx}
@@ -43,9 +49,11 @@ func New(appCtx *app.Context) http.Handler {
 	mux.HandleFunc("/status", jsonHandler(systemHandler.Status))
 	mux.HandleFunc("/usage-service/info", jsonHandler(systemHandler.Info))
 	mux.HandleFunc("/usage-service/config", jsonHandler(managerConfigHandler.Handle))
+	mux.HandleFunc("/usage-service/account-processing-policy", jsonHandler(automationHandler.Handle))
+	mux.HandleFunc("/usage-service/quota-cooldowns", jsonHandler(quotaCooldownHandler.Handle))
 	mux.HandleFunc("/setup", jsonHandler(setupHandler.Setup))
 	mux.HandleFunc("/management.html", panelHandler.ManagementHTML)
-	mux.HandleFunc("/", rootHandler(appCtx, jsonHandler, usageHandler, modelPriceHandler, apiKeyAliasHandler, codexInspectionHandler, dashboardHandler, monitoringHandler, proxyHandler))
+	mux.HandleFunc("/", rootHandler(appCtx, jsonHandler, usageHandler, modelPriceHandler, apiKeyAliasHandler, accountActionHandler, codexInspectionHandler, dashboardHandler, monitoringHandler, proxyHandler))
 
 	return middleware.Recovery(middleware.RequestLogger(mux))
 }
@@ -56,6 +64,7 @@ func rootHandler(
 	usageHandler *usagecontroller.Handler,
 	modelPriceHandler *modelpricecontroller.Handler,
 	apiKeyAliasHandler *apikeyaliascontroller.Handler,
+	accountActionHandler *accountactioncontroller.Handler,
 	codexInspectionHandler *codexinspectioncontroller.Handler,
 	dashboardHandler *dashboardcontroller.Handler,
 	monitoringHandler *monitoringcontroller.Handler,
@@ -73,6 +82,10 @@ func rootHandler(
 		}
 		if strings.HasPrefix(r.URL.Path, "/v0/management/api-key-aliases") {
 			jsonHandler(apiKeyAliasHandler.Handle)(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v0/management/account-action-candidates") {
+			jsonHandler(accountActionHandler.Handle)(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/v0/management/codex-inspection") {
@@ -96,12 +109,13 @@ func rootHandler(
 			middleware.WithCORS(appCtx.Config, proxyHandler.Management)(w, r)
 			return
 		}
-		if proxysvc.IsModelListPath(r.URL.Path) {
+		if r.URL.Path == "/v1/models" || r.URL.Path == "/v1/models/" ||
+			r.URL.Path == "/models" || r.URL.Path == "/models/" {
 			middleware.WithCORS(appCtx.Config, proxyHandler.ModelList)(w, r)
 			return
 		}
-		if proxysvc.IsCPAProxyPath(r.URL.Path) {
-			middleware.WithCORS(appCtx.Config, proxyHandler.CPA)(w, r)
+		if proxysvc.IsCPAPluginResourcePath(r.URL.Path) {
+			middleware.WithCORS(appCtx.Config, proxyHandler.CPAResource)(w, r)
 			return
 		}
 		if r.URL.Path == "/" {

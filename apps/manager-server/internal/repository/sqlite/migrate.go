@@ -51,6 +51,13 @@ func Migrate(db *sql.DB) error {
 			failed integer not null default 0,
 			fail_status_code integer,
 			fail_summary text,
+			response_metadata_json text,
+			header_quota_recover_at_ms integer,
+			header_quota_used_percent real,
+			header_quota_plan_type text,
+			header_error_kind text,
+			header_error_code text,
+			header_trace_id text,
 			fail_body text,
 			raw_json text,
 			created_at_ms integer not null
@@ -95,6 +102,30 @@ func Migrate(db *sql.DB) error {
 			alias text not null,
 			updated_at_ms integer not null
 		)`,
+		`create table if not exists account_action_candidates (
+			id integer primary key autoincrement,
+			action_type text not null,
+			status text not null,
+			provider text,
+			auth_file_name text not null,
+			auth_index text,
+			account_snapshot text,
+			account_id_snapshot text,
+			auth_label text,
+			reason text,
+			evidence_json text,
+			last_error text,
+			first_seen_at_ms integer not null,
+			last_seen_at_ms integer not null,
+			hit_count integer not null default 1,
+			created_at_ms integer not null,
+			updated_at_ms integer not null
+		)`,
+		`create unique index if not exists idx_account_action_candidates_pending_identity_action
+			on account_action_candidates(auth_file_name, action_type, coalesce(auth_index, ''), coalesce(account_id_snapshot, '')) where status = 'pending'`,
+		`drop index if exists idx_account_action_candidates_pending_file_action`,
+		`create index if not exists idx_account_action_candidates_status_seen
+			on account_action_candidates(status, last_seen_at_ms)`,
 		`create table if not exists codex_inspection_runs (
 			id integer primary key autoincrement,
 			trigger_type text not null,
@@ -141,6 +172,10 @@ func Migrate(db *sql.DB) error {
 			used_percent real,
 			is_quota integer not null default 0,
 			error text,
+			plan_type text,
+			quota_windows_json text,
+			error_kind text,
+			error_detail text,
 			created_at_ms integer not null,
 			foreign key(run_id) references codex_inspection_runs(id) on delete cascade,
 			unique(run_id, account_key)
@@ -156,6 +191,25 @@ func Migrate(db *sql.DB) error {
 			foreign key(run_id) references codex_inspection_runs(id) on delete cascade
 		)`,
 		`create index if not exists idx_codex_inspection_logs_run on codex_inspection_logs(run_id, created_at_ms)`,
+		`create table if not exists quota_cooldowns (
+			id integer primary key autoincrement,
+			auth_file_name text not null,
+			auth_index text,
+			account_snapshot text,
+			provider text,
+			recover_at_ms integer not null,
+			owner text not null,
+			event_hash text,
+			pre_disabled_state integer not null default 0,
+			status text not null,
+			disabled_at_ms integer not null,
+			recovered_at_ms integer,
+			last_error text,
+			created_at_ms integer not null,
+			updated_at_ms integer not null
+		)`,
+		`create index if not exists idx_quota_cooldowns_due on quota_cooldowns(status, recover_at_ms)`,
+		`create unique index if not exists idx_quota_cooldowns_active_owner on quota_cooldowns(auth_file_name, owner) where status = 'active'`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
@@ -171,7 +225,56 @@ func Migrate(db *sql.DB) error {
 	if err := ensureCodexInspectionResultColumns(db); err != nil {
 		return err
 	}
+	if err := ensureAccountActionCandidateColumns(db); err != nil {
+		return err
+	}
 	return ensureModelPriceColumns(db)
+}
+
+func ensureAccountActionCandidateColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(account_action_candidates)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "account_id_snapshot", definition: "text"},
+		{name: "last_error", definition: "text"},
+	}
+	for _, column := range columns {
+		if _, ok := existing[column.name]; ok {
+			continue
+		}
+		if _, err := db.Exec(`alter table account_action_candidates add column ` + column.name + ` ` + column.definition); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`create unique index if not exists idx_account_action_candidates_pending_identity_action
+		on account_action_candidates(auth_file_name, action_type, coalesce(auth_index, ''), coalesce(account_id_snapshot, '')) where status = 'pending'`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`drop index if exists idx_account_action_candidates_pending_file_action`)
+	return err
 }
 
 func ensureCodexInspectionRunColumns(db *sql.DB) error {
@@ -250,6 +353,10 @@ func ensureCodexInspectionResultColumns(db *sql.DB) error {
 		{name: "action_status", definition: "text"},
 		{name: "executed_action", definition: "text"},
 		{name: "action_error", definition: "text"},
+		{name: "plan_type", definition: "text"},
+		{name: "quota_windows_json", definition: "text"},
+		{name: "error_kind", definition: "text"},
+		{name: "error_detail", definition: "text"},
 	}
 	for _, column := range columns {
 		if _, ok := existing[column.name]; ok {
@@ -310,6 +417,13 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 		{name: "ttft_ms", definition: "integer"},
 		{name: "fail_status_code", definition: "integer"},
 		{name: "fail_summary", definition: "text"},
+		{name: "response_metadata_json", definition: "text"},
+		{name: "header_quota_recover_at_ms", definition: "integer"},
+		{name: "header_quota_used_percent", definition: "real"},
+		{name: "header_quota_plan_type", definition: "text"},
+		{name: "header_error_kind", definition: "text"},
+		{name: "header_error_code", definition: "text"},
+		{name: "header_trace_id", definition: "text"},
 		{name: "fail_body", definition: "text"},
 	}
 	for _, column := range columns {
@@ -321,6 +435,15 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 			column.name,
 			column.definition,
 		)); err != nil {
+			return err
+		}
+	}
+	for _, statement := range []string{
+		`create index if not exists idx_usage_events_header_quota_recover on usage_events(header_quota_recover_at_ms)`,
+		`create index if not exists idx_usage_events_header_error_kind on usage_events(header_error_kind)`,
+		`create index if not exists idx_usage_events_header_trace_id on usage_events(header_trace_id)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
 			return err
 		}
 	}

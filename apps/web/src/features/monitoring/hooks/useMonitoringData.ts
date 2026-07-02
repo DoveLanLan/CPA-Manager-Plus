@@ -844,6 +844,7 @@ export function useMonitoringData({
       providers: uniqueOptionValues(rangeFilteredRows.map((row) => row.provider)),
       models: uniqueOptionValues(rangeFilteredRows.map((row) => row.model)),
       channels: uniqueOptionValues(rangeFilteredRows.map((row) => row.channel)),
+      headerTraceIds: uniqueOptionValues(rangeFilteredRows.map((row) => row.headerTraceId)),
     }),
     [rangeFilteredRows]
   );

@@ -24,13 +24,12 @@ export type AuthFileModelItem = {
 };
 export type AuthFileIconAsset = string | { light: string; dark: string };
 
-export type QuotaProviderType = 'antigravity' | 'claude' | 'codex' | 'gemini-cli' | 'kimi' | 'xai';
+export type QuotaProviderType = 'antigravity' | 'claude' | 'codex' | 'kimi' | 'xai';
 
 export const QUOTA_PROVIDER_TYPES = new Set<QuotaProviderType>([
   'antigravity',
   'claude',
   'codex',
-  'gemini-cli',
   'kimi',
   'xai',
 ]);
@@ -42,6 +41,7 @@ export const AUTH_FILE_REFRESH_WARNING_MS = 24 * 60 * 60 * 1000;
 export const INTEGER_STRING_PATTERN = /^[+-]?\d+$/;
 export const TRUTHY_TEXT_VALUES = new Set(['true', '1', 'yes', 'y', 'on']);
 export const FALSY_TEXT_VALUES = new Set(['false', '0', 'no', 'n', 'off']);
+export const AUTH_FILE_WEBSOCKET_PROVIDERS = new Set(['codex', 'xai']);
 
 // 标签类型颜色配置 — 基于各提供商 Logo 品牌色调配，确保彼此不重复
 export const TYPE_COLORS: Record<string, TypeColorSet> = {
@@ -59,11 +59,6 @@ export const TYPE_COLORS: Record<string, TypeColorSet> = {
   gemini: {
     light: { bg: '#e3f2fd', text: '#1565c0' },
     dark: { bg: '#0d47a1', text: '#64b5f6' },
-  },
-  // Gemini-CLI: 同 Gemini 图标，用更深的海军蓝区分
-  'gemini-cli': {
-    light: { bg: '#e0e8ff', text: '#1e4fa3' },
-    dark: { bg: '#1c3f73', text: '#a8c7ff' },
   },
   // AI Studio: 使用 Gemini 图标，中性灰标签
   aistudio: {
@@ -116,7 +111,6 @@ export const AUTH_FILE_ICONS: Record<string, AuthFileIconAsset> = {
   claude: iconClaude,
   codex: iconCodex,
   gemini: iconGemini,
-  'gemini-cli': iconGemini,
   xai: { light: iconGrok, dark: iconGrokDark },
   iflow: iconIflow,
   kimi: { light: iconKimiLight, dark: iconKimiDark },
@@ -224,10 +218,13 @@ export const parseDisableCoolingValue = (value: unknown): boolean | undefined =>
   return undefined;
 };
 
-export const readCodexAuthFileWebsockets = (value: Record<string, unknown>): boolean =>
-  parseDisableCoolingValue(value.websockets) ?? false;
+export const supportsAuthFileWebsockets = (providerKey: string): boolean =>
+  AUTH_FILE_WEBSOCKET_PROVIDERS.has(normalizeProviderKey(providerKey));
 
-export const applyCodexAuthFileWebsockets = (
+export const readAuthFileWebsockets = (value: Record<string, unknown>): boolean =>
+  parseDisableCoolingValue(value.websockets ?? value.websocket) ?? false;
+
+export const applyAuthFileWebsockets = (
   value: Record<string, unknown>,
   websockets: boolean
 ): Record<string, unknown> => {
@@ -236,6 +233,9 @@ export const applyCodexAuthFileWebsockets = (
   next.websockets = websockets;
   return next;
 };
+
+export const readCodexAuthFileWebsockets = readAuthFileWebsockets;
+export const applyCodexAuthFileWebsockets = applyAuthFileWebsockets;
 
 export function isRuntimeOnlyAuthFile(file: AuthFileItem): boolean {
   const raw = file['runtime_only'] ?? file.runtimeOnly;

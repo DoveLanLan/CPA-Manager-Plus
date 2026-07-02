@@ -1,19 +1,15 @@
 import type { TFunction } from 'i18next';
 import type {
-  AntigravityModelsPayload,
   AntigravityQuotaGroup,
+  AntigravityQuotaSummaryPayload,
   AuthFileItem,
   ClaudeExtraUsage,
   ClaudeProfileResponse,
   ClaudeQuotaWindow,
   ClaudeUsagePayload,
+  CodexRateLimitResetCredit,
   CodexQuotaWindow,
   CodexUsagePayload,
-  GeminiCliCodeAssistPayload,
-  GeminiCliCredits,
-  GeminiCliParsedBucket,
-  GeminiCliQuotaBucketState,
-  GeminiCliUserTier,
   KimiQuotaRow,
   XaiBillingConfig,
   XaiBillingSummary,
@@ -28,57 +24,40 @@ import {
   CLAUDE_USAGE_URL,
   CLAUDE_USAGE_WINDOW_KEYS,
   CODEX_REQUEST_HEADERS,
+  CODEX_RATE_LIMIT_RESET_CREDITS_URL,
   CODEX_USAGE_URL,
-  GEMINI_CLI_CODE_ASSIST_URL,
-  GEMINI_CLI_QUOTA_URL,
-  GEMINI_CLI_REQUEST_HEADERS,
   KIMI_REQUEST_HEADERS,
   KIMI_USAGE_URL,
   XAI_BILLING_URL,
   XAI_REQUEST_HEADERS,
 } from './constants';
-import {
-  buildAntigravityQuotaGroups,
-  buildGeminiCliQuotaBuckets,
-  buildKimiQuotaRows,
-} from './builders';
+import { buildAntigravityQuotaGroups, buildKimiQuotaRows } from './builders';
 import { createStatusError, formatQuotaResetTime, getStatusFromError } from './formatters';
 import {
   normalizeAuthIndex,
-  normalizeGeminiCliModelId,
   normalizeNumberValue,
   normalizePlanType,
-  normalizeQuotaFraction,
   normalizeStringValue,
   parseAntigravityPayload,
   parseClaudeUsagePayload,
   parseCodexUsagePayload,
-  parseGeminiCliCodeAssistPayload,
-  parseGeminiCliQuotaPayload,
   parseKimiUsagePayload,
   parseXaiBillingPayload,
 } from './parsers';
-import {
-  resolveCodexChatgptAccountId,
-  resolveCodexPlanType,
-  resolveGeminiCliProjectId,
-} from './resolvers';
+import { resolveCodexChatgptAccountId, resolveCodexPlanType } from './resolvers';
 import { buildCodexQuotaWindowInfos } from './codexQuota';
+import { normalizeCodexResetCreditsPayload } from './resetCredits';
 
 const DEFAULT_ANTIGRAVITY_PROJECT_ID = 'bamboo-precept-lgxtn';
-const GEMINI_CLI_G1_CREDIT_TYPE = 'GOOGLE_ONE_AI';
-
-const GEMINI_CLI_TIER_LABELS: Record<string, string> = {
-  'free-tier': 'tier_free',
-  'legacy-tier': 'tier_legacy',
-  'standard-tier': 'tier_standard',
-  'g1-pro-tier': 'tier_pro',
-  'g1-ultra-tier': 'tier_ultra',
-};
+const CODEX_RESET_CREDITS_REQUEST_TIMEOUT_MS = 8000;
 
 export type CodexQuotaData = {
   planType: string | null;
   windows: CodexQuotaWindow[];
+  subscriptionActiveUntil: string | null;
+  rateLimitResetCreditsAvailableCount: number | null;
+  rateLimitResetCredits: CodexRateLimitResetCredit[];
+  rateLimitResetCreditsError: string | null;
 };
 
 export type ClaudeQuotaData = {
@@ -87,19 +66,35 @@ export type ClaudeQuotaData = {
   planType?: string | null;
 };
 
-export type GeminiCliQuotaBucketsData = {
-  authIndex: string;
-  projectId: string;
-  buckets: GeminiCliQuotaBucketState[];
-};
-
-export type GeminiCliSupplementaryQuota = {
-  tierLabel: string | null;
-  tierId: string | null;
-  creditBalance: number | null;
+export type AntigravityQuotaData = {
+  groups: AntigravityQuotaGroup[];
+  serverTimeOffsetMs: number | null;
 };
 
 export const resolveAntigravityProjectId = async (file: AuthFileItem): Promise<string> => {
+  const directProjectId = normalizeStringValue(file.project_id ?? file.projectId);
+  if (directProjectId) return directProjectId;
+
+  const metadata =
+    file.metadata && typeof file.metadata === 'object' && file.metadata !== null
+      ? (file.metadata as Record<string, unknown>)
+      : null;
+  const metadataProjectId = metadata
+    ? normalizeStringValue(metadata.project_id ?? metadata.projectId)
+    : null;
+  if (metadataProjectId) return metadataProjectId;
+
+  const attributes =
+    file.attributes && typeof file.attributes === 'object' && file.attributes !== null
+      ? (file.attributes as Record<string, unknown>)
+      : null;
+  const attributesProjectId = attributes
+    ? normalizeStringValue(
+        attributes.project_id ?? attributes.projectId ?? attributes.gemini_virtual_project
+      )
+    : null;
+  if (attributesProjectId) return attributesProjectId;
+
   try {
     const text = await authFilesApi.downloadText(file.name);
     const trimmed = text.trim();
@@ -131,10 +126,22 @@ export const resolveAntigravityProjectId = async (file: AuthFileItem): Promise<s
   return DEFAULT_ANTIGRAVITY_PROJECT_ID;
 };
 
+const resolveResponseServerTimeOffsetMs = (
+  header: Record<string, string[]> | undefined
+): number | null => {
+  if (!header) return null;
+  const dateEntry = Object.entries(header).find(([key]) => key.toLowerCase() === 'date');
+  const rawDate = dateEntry?.[1]?.[0];
+  if (!rawDate) return null;
+  const serverTime = new Date(rawDate).getTime();
+  if (Number.isNaN(serverTime)) return null;
+  return serverTime - Date.now();
+};
+
 export const fetchAntigravityQuota = async (
   file: AuthFileItem,
   t: TFunction
-): Promise<AntigravityQuotaGroup[]> => {
+): Promise<AntigravityQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
   if (!authIndex) {
@@ -169,20 +176,24 @@ export const fetchAntigravityQuota = async (
       }
 
       hadSuccess = true;
-      const payload = parseAntigravityPayload(result.body ?? result.bodyText);
-      const models = payload?.models;
-      if (!models || typeof models !== 'object' || Array.isArray(models)) {
+      const payload = parseAntigravityPayload(
+        result.body ?? result.bodyText
+      ) as AntigravityQuotaSummaryPayload | null;
+      if (!payload) {
         lastError = t('antigravity_quota.empty_models');
         continue;
       }
 
-      const groups = buildAntigravityQuotaGroups(models as AntigravityModelsPayload);
+      const groups = buildAntigravityQuotaGroups(payload);
       if (groups.length === 0) {
         lastError = t('antigravity_quota.empty_models');
         continue;
       }
 
-      return groups;
+      return {
+        groups,
+        serverTimeOffsetMs: resolveResponseServerTimeOffsetMs(result.header),
+      };
     } catch (err: unknown) {
       lastError = err instanceof Error ? err.message : t('common.unknown_error');
       const status = getStatusFromError(err);
@@ -196,7 +207,7 @@ export const fetchAntigravityQuota = async (
   }
 
   if (hadSuccess) {
-    return [];
+    return { groups: [], serverTimeOffsetMs: null };
   }
 
   throw createStatusError(lastError || t('common.unknown_error'), priorityStatus ?? lastStatus);
@@ -204,9 +215,10 @@ export const fetchAntigravityQuota = async (
 
 export const buildCodexQuotaWindows = (
   payload: CodexUsagePayload,
-  t: TFunction
+  t: TFunction,
+  planType?: string | null
 ): CodexQuotaWindow[] =>
-  buildCodexQuotaWindowInfos(payload).map((window) => ({
+  buildCodexQuotaWindowInfos(payload, { planType }).map((window) => ({
     id: window.id,
     label: t(window.labelKey, window.labelParams),
     labelKey: window.labelKey,
@@ -225,6 +237,86 @@ const buildCodexUsageRequestHeaders = (accountId?: string | null): Record<string
     headers['Chatgpt-Account-Id'] = trimmedAccountId;
   }
   return headers;
+};
+
+const buildCodexResetCreditsRequestHeaders = (
+  accountId?: string | null
+): Record<string, string> => ({
+  ...buildCodexUsageRequestHeaders(accountId),
+  Accept: 'application/json',
+  'OpenAI-Beta': 'codex-1',
+  Originator: 'Codex Desktop',
+});
+
+const resolveCodexRateLimitResetCreditsAvailableCount = (
+  payload: CodexUsagePayload
+): number | null => {
+  const credits = payload.rate_limit_reset_credits ?? payload.rateLimitResetCredits;
+  return normalizeNumberValue(credits?.available_count ?? credits?.availableCount);
+};
+
+const resolveCodexSubscriptionActiveUntil = (payload: CodexUsagePayload): string | null =>
+  normalizeStringValue(payload.subscription_active_until ?? payload.subscriptionActiveUntil);
+
+type CodexResetCreditsData = {
+  availableCount: number | null;
+  credits: CodexRateLimitResetCredit[];
+  error: string | null;
+};
+
+const resolveCodexResetCreditsAvailableCount = (
+  resetCredits: CodexResetCreditsData,
+  usageAvailableCount: number | null
+): number | null => {
+  if (resetCredits.availableCount !== null) return resetCredits.availableCount;
+  if (resetCredits.credits.length > 0) return resetCredits.credits.length;
+  return usageAvailableCount;
+};
+
+const fetchCodexResetCredits = async (
+  authIndex: string,
+  accountId?: string | null
+): Promise<CodexResetCreditsData> => {
+  try {
+    const result = await apiCallApi.request(
+      {
+        authIndex,
+        method: 'GET',
+        url: CODEX_RATE_LIMIT_RESET_CREDITS_URL,
+        header: buildCodexResetCreditsRequestHeaders(accountId),
+      },
+      { timeout: CODEX_RESET_CREDITS_REQUEST_TIMEOUT_MS }
+    );
+
+    if (result.statusCode < 200 || result.statusCode >= 300) {
+      return {
+        availableCount: null,
+        credits: [],
+        error: getApiCallErrorMessage(result),
+      };
+    }
+
+    const payload = normalizeCodexResetCreditsPayload(result.body ?? result.bodyText);
+    if (payload.invalidPayload) {
+      return {
+        availableCount: null,
+        credits: [],
+        error: 'Invalid Codex reset credits payload',
+      };
+    }
+
+    return {
+      availableCount: payload.availableCount,
+      credits: payload.credits,
+      error: null,
+    };
+  } catch (err: unknown) {
+    return {
+      availableCount: null,
+      credits: [],
+      error: err instanceof Error ? err.message : 'Failed to fetch Codex reset credits',
+    };
+  }
 };
 
 export const fetchCodexQuota = async (
@@ -256,157 +348,20 @@ export const fetchCodexQuota = async (
   }
 
   const planTypeFromUsage = normalizePlanType(payload.plan_type ?? payload.planType);
-  const windows = buildCodexQuotaWindows(payload, t);
-  return { planType: planTypeFromUsage ?? planTypeFromFile, windows };
-};
-
-const resolveGeminiCliTierLabel = (
-  payload: GeminiCliCodeAssistPayload | null,
-  t: TFunction
-): string | null => {
-  if (!payload) return null;
-  const currentTier: GeminiCliUserTier | null | undefined =
-    payload.currentTier ?? payload.current_tier;
-  const paidTier: GeminiCliUserTier | null | undefined = payload.paidTier ?? payload.paid_tier;
-  const rawId = normalizeStringValue(paidTier?.id) ?? normalizeStringValue(currentTier?.id);
-  if (!rawId) return null;
-  const tierId = rawId.toLowerCase();
-  const labelKey = GEMINI_CLI_TIER_LABELS[tierId];
-  return labelKey ? t(`gemini_cli_quota.${labelKey}`) : rawId;
-};
-
-const resolveGeminiCliTierId = (payload: GeminiCliCodeAssistPayload | null): string | null => {
-  if (!payload) return null;
-  const currentTier: GeminiCliUserTier | null | undefined =
-    payload.currentTier ?? payload.current_tier;
-  const paidTier: GeminiCliUserTier | null | undefined = payload.paidTier ?? payload.paid_tier;
-  const rawId = normalizeStringValue(paidTier?.id) ?? normalizeStringValue(currentTier?.id);
-  return rawId ? rawId.toLowerCase() : null;
-};
-
-const resolveGeminiCliCreditBalance = (
-  payload: GeminiCliCodeAssistPayload | null
-): number | null => {
-  if (!payload) return null;
-  const paidTier: GeminiCliUserTier | null | undefined = payload.paidTier ?? payload.paid_tier;
-  const currentTier: GeminiCliUserTier | null | undefined =
-    payload.currentTier ?? payload.current_tier;
-  const tier = paidTier ?? currentTier;
-  if (!tier) return null;
-  const credits: GeminiCliCredits[] = tier.availableCredits ?? tier.available_credits ?? [];
-  let total = 0;
-  let found = false;
-  for (const credit of credits) {
-    const creditType = normalizeStringValue(credit.creditType ?? credit.credit_type);
-    if (creditType !== GEMINI_CLI_G1_CREDIT_TYPE) continue;
-    const amount = normalizeNumberValue(credit.creditAmount ?? credit.credit_amount);
-    if (amount !== null) {
-      total += amount;
-      found = true;
-    }
-  }
-  return found ? total : null;
-};
-
-export const fetchGeminiCliCodeAssist = async (
-  authIndex: string,
-  projectId: string,
-  t: TFunction
-): Promise<GeminiCliSupplementaryQuota> => {
-  try {
-    const result = await apiCallApi.request({
-      authIndex,
-      method: 'POST',
-      url: GEMINI_CLI_CODE_ASSIST_URL,
-      header: { ...GEMINI_CLI_REQUEST_HEADERS },
-      data: JSON.stringify({
-        cloudaicompanionProject: projectId,
-        metadata: {
-          ideType: 'IDE_UNSPECIFIED',
-          platform: 'PLATFORM_UNSPECIFIED',
-          pluginType: 'GEMINI',
-          duetProject: projectId,
-        },
-      }),
-    });
-
-    if (result.statusCode < 200 || result.statusCode >= 300) {
-      return { tierLabel: null, tierId: null, creditBalance: null };
-    }
-
-    const payload = parseGeminiCliCodeAssistPayload(result.body ?? result.bodyText);
-    return {
-      tierLabel: resolveGeminiCliTierLabel(payload, t),
-      tierId: resolveGeminiCliTierId(payload),
-      creditBalance: resolveGeminiCliCreditBalance(payload),
-    };
-  } catch {
-    return { tierLabel: null, tierId: null, creditBalance: null };
-  }
-};
-
-export const fetchGeminiCliQuotaBuckets = async (
-  file: AuthFileItem,
-  t: TFunction
-): Promise<GeminiCliQuotaBucketsData> => {
-  const rawAuthIndex = file['auth_index'] ?? file.authIndex;
-  const authIndex = normalizeAuthIndex(rawAuthIndex);
-  if (!authIndex) {
-    throw new Error(t('gemini_cli_quota.missing_auth_index'));
-  }
-
-  const projectId = resolveGeminiCliProjectId(file);
-  if (!projectId) {
-    throw new Error(t('gemini_cli_quota.missing_project_id'));
-  }
-
-  const quotaResponse = await apiCallApi.request({
-    authIndex,
-    method: 'POST',
-    url: GEMINI_CLI_QUOTA_URL,
-    header: { ...GEMINI_CLI_REQUEST_HEADERS },
-    data: JSON.stringify({ project: projectId }),
-  });
-  if (quotaResponse.statusCode < 200 || quotaResponse.statusCode >= 300) {
-    throw createStatusError(getApiCallErrorMessage(quotaResponse), quotaResponse.statusCode);
-  }
-
-  const payload = parseGeminiCliQuotaPayload(quotaResponse.body ?? quotaResponse.bodyText);
-  const buckets = Array.isArray(payload?.buckets) ? payload?.buckets : [];
-
-  const parsedBuckets = buckets
-    .map((bucket) => {
-      const modelId = normalizeGeminiCliModelId(bucket.modelId ?? bucket.model_id);
-      if (!modelId) return null;
-      const tokenType = normalizeStringValue(bucket.tokenType ?? bucket.token_type);
-      const remainingFractionRaw = normalizeQuotaFraction(
-        bucket.remainingFraction ?? bucket.remaining_fraction
-      );
-      const remainingAmount = normalizeNumberValue(
-        bucket.remainingAmount ?? bucket.remaining_amount
-      );
-      const resetTime = normalizeStringValue(bucket.resetTime ?? bucket.reset_time) ?? undefined;
-      let fallbackFraction: number | null = null;
-      if (remainingAmount !== null) {
-        fallbackFraction = remainingAmount <= 0 ? 0 : null;
-      } else if (resetTime) {
-        fallbackFraction = 0;
-      }
-      const remainingFraction = remainingFractionRaw ?? fallbackFraction;
-      return {
-        modelId,
-        tokenType,
-        remainingFraction,
-        remainingAmount,
-        resetTime,
-      };
-    })
-    .filter((bucket): bucket is GeminiCliParsedBucket => bucket !== null);
-
+  const planType = planTypeFromUsage ?? planTypeFromFile;
+  const windows = buildCodexQuotaWindows(payload, t, planType);
+  const usageResetCreditsAvailableCount = resolveCodexRateLimitResetCreditsAvailableCount(payload);
+  const resetCredits = await fetchCodexResetCredits(authIndex, accountId);
   return {
-    authIndex,
-    projectId,
-    buckets: buildGeminiCliQuotaBuckets(parsedBuckets),
+    planType,
+    windows,
+    subscriptionActiveUntil: resolveCodexSubscriptionActiveUntil(payload),
+    rateLimitResetCreditsAvailableCount: resolveCodexResetCreditsAvailableCount(
+      resetCredits,
+      usageResetCreditsAvailableCount
+    ),
+    rateLimitResetCredits: resetCredits.credits,
+    rateLimitResetCreditsError: resetCredits.error,
   };
 };
 

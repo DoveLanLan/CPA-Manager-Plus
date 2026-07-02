@@ -109,9 +109,12 @@
 }
 
 .panelExtra {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
 }
 
@@ -220,7 +223,7 @@
 }
 
 .statusMeta .statusMetaHost {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   color: var(--inspect-ink);
   background: transparent;
   border: 1px solid color-mix(in srgb, var(--inspect-line) 75%, transparent);
@@ -588,6 +591,10 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  justify-content: flex-end;
 }
 
 .filterRow {
@@ -597,6 +604,25 @@
   gap: 8px;
   margin-top: -2px;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.segmentedGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.segmentedLabel {
+  flex: 0 0 auto;
+  color: var(--inspect-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .segmentedControl {
@@ -604,19 +630,43 @@
   align-items: stretch;
   flex-wrap: nowrap;
   gap: 0;
+  min-width: 0;
   max-width: 100%;
   padding: 0;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--inspect-line) 86%, transparent);
   background: color-mix(in srgb, var(--inspect-surface-elevated) 82%, var(--inspect-surface));
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-sizing: border-box;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  scrollbar-color: color-mix(in srgb, var(--inspect-muted) 34%, transparent) transparent;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
 }
 
 .segmentedControl::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+
+.segmentedControl::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.segmentedControl::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--inspect-muted) 34%, transparent);
+}
+
+.filterRow .segmentedControl {
+  flex: 0 1 auto;
+  width: fit-content;
+}
+
+.resultsHeaderActions .segmentedControl,
+.logFilterGroup .segmentedControl {
+  flex: 1 1 auto;
 }
 
 .segmentButton {
@@ -690,9 +740,13 @@
 }
 
 .tableWrap {
+  width: 100%;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .resultPaginationBar {
@@ -750,35 +804,35 @@
 }
 
 .table {
-  width: 100%;
-  min-width: 920px;
+  width: max(100%, 1240px);
+  min-width: 1240px;
   border-collapse: separate;
   border-spacing: 0 8px;
   table-layout: fixed;
 }
 
 .accountColumn {
-  width: 34%;
+  width: 28%;
 }
 
 .stateColumn {
-  width: 11%;
+  width: 10%;
 }
 
 .httpColumn {
-  width: 9%;
+  width: 8%;
 }
 
 .usageColumn {
-  width: 11%;
+  width: 25%;
 }
 
 .actionColumn {
-  width: 12%;
+  width: 11%;
 }
 
 .operationColumn {
-  width: 23%;
+  width: 18%;
 }
 
 .table thead th {
@@ -853,10 +907,142 @@
   overflow-wrap: anywhere;
 }
 
+.primaryEvidence {
+  color: var(--inspect-accent-strong);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .primaryError {
   color: var(--inspect-red);
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.rawDetail {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--inspect-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.rawDetail summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.rawDetail pre {
+  max-height: 140px;
+  max-width: 100%;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--inspect-red) 18%, var(--inspect-line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--inspect-red) 5%, var(--inspect-surface));
+  color: var(--inspect-ink);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.planBadge {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  max-width: 100%;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--inspect-accent) 24%, var(--inspect-line));
+  background: color-mix(in srgb, var(--inspect-accent) 8%, var(--inspect-surface));
+  color: var(--inspect-accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.quotaWindowList {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.quotaWindowRow {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.quotaWindowHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.quotaWindowLabel,
+.quotaWindowValue,
+.quotaWindowReset {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.quotaWindowLabel {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--inspect-ink);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.quotaWindowValue {
+  flex: 0 0 auto;
+  color: var(--inspect-ink);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.quotaWindowBar {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-subtle-strong);
+}
+
+.quotaWindowBarFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--inspect-green);
+  transition: width 0.2s ease;
+}
+
+.quotaWindowBarFillHigh {
+  background: var(--inspect-green);
+}
+
+.quotaWindowBarFillMedium {
+  background: var(--quota-medium-color, var(--inspect-amber));
+}
+
+.quotaWindowBarFillLow {
+  background: var(--inspect-red);
+}
+
+.quotaWindowReset {
+  color: var(--inspect-muted);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   overflow-wrap: anywhere;
 }
 
@@ -1931,17 +2117,25 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .logFilterGroup {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  flex: 1 1 320px;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .logToolbarRight {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -2070,6 +2264,15 @@
 
   .logRow {
     grid-template-columns: 1fr;
+  }
+
+  .tableWrap {
+    margin-inline: -2px;
+    padding-inline: 2px;
+  }
+
+  .table {
+    width: 1240px;
   }
 
   .resultPaginationControls {

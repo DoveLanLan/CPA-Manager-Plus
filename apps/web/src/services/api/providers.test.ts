@@ -101,3 +101,380 @@ describe('providersApi auth-index preservation', () => {
     expect(mocks.put).toHaveBeenCalledWith('/gemini-api-key', [{ 'auth-index': 'auth-3' }]);
   });
 });
+
+describe('providersApi v1.16 provider fields', () => {
+  it('normalizes OpenAI model image/thinking and provider disable-cooling fields', async () => {
+    mocks.get.mockResolvedValue({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'disable-cooling': true,
+          models: [
+            {
+              name: 'gpt-image',
+              image: true,
+              thinking: { effort: 'high' },
+            },
+          ],
+        },
+      ],
+    });
+
+    const providers = await providersApi.getOpenAIProviders();
+
+    expect(providers[0]).toMatchObject({
+      name: 'openai-compatible',
+      disableCooling: true,
+      models: [{ name: 'gpt-image', image: true, thinking: { effort: 'high' } }],
+    });
+  });
+
+  it('fills missing OpenAI provider disable-cooling from /config fallback', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/openai-compatibility') {
+        return {
+          'openai-compatibility': [
+            {
+              name: 'openai-compatible',
+              'base-url': 'https://api.example.com/v1',
+              'api-key-entries': [],
+            },
+          ],
+        };
+      }
+      if (url === '/config') {
+        return {
+          'openai-compatibility': [
+            {
+              name: 'openai-compatible',
+              'base-url': 'https://api.example.com/v1',
+              'api-key-entries': [],
+              'disable-cooling': true,
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const providers = await providersApi.getOpenAIProviders();
+
+    expect(providers[0]).toMatchObject({
+      name: 'openai-compatible',
+      disableCooling: true,
+    });
+    expect(mocks.get).toHaveBeenNthCalledWith(1, '/openai-compatibility');
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/config');
+  });
+
+  it('serializes Claude disable-cooling, cch signing, cloak cache, and model metadata', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'auth-index': 'auth-4',
+          'raw-field': 'keep',
+          cloak: { 'raw-cloak-field': 'keep-cloak' },
+          models: [{ name: 'claude-sonnet', 'raw-model-field': true }],
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveClaudeConfigs([
+      {
+        apiKey: '',
+        authIndex: 'auth-4',
+        disableCooling: true,
+        experimentalCchSigning: true,
+        cloak: { mode: 'auto', cacheUserId: true },
+        models: [
+          {
+            name: 'claude-sonnet',
+            alias: 'sonnet',
+            image: true,
+            thinking: { budget_tokens: 1024 },
+          },
+        ],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenCalledWith('/claude-api-key', [
+      {
+        'raw-field': 'keep',
+        'auth-index': 'auth-4',
+        'disable-cooling': true,
+        'experimental-cch-signing': true,
+        cloak: {
+          'raw-cloak-field': 'keep-cloak',
+          mode: 'auto',
+          'cache-user-id': true,
+        },
+        models: [
+          {
+            'raw-model-field': true,
+            name: 'claude-sonnet',
+            alias: 'sonnet',
+            image: true,
+            thinking: { budget_tokens: 1024 },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('serializes Gemini key disable-cooling and OpenAI provider model metadata', async () => {
+    mocks.get.mockResolvedValueOnce({ 'gemini-api-key': [] });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveGeminiKeys([{ apiKey: 'gemini-key', disableCooling: true }]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/gemini-api-key', [
+      { 'api-key': 'gemini-key', 'disable-cooling': true },
+    ]);
+
+    mocks.get.mockResolvedValueOnce({ 'openai-compatibility': [] });
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        disableCooling: true,
+        apiKeyEntries: [],
+        models: [{ name: 'gpt-image', image: true, thinking: { mode: 'auto' } }],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        'disable-cooling': true,
+        models: [{ name: 'gpt-image', image: true, thinking: { mode: 'auto' } }],
+      },
+    ]);
+  });
+
+  it('preserves raw provider fields when section payloads omit them', async () => {
+    mocks.put.mockResolvedValue({});
+
+    mocks.get.mockResolvedValueOnce({
+      'gemini-api-key': [
+        {
+          'api-key': 'gemini-key',
+          'disable-cooling': true,
+          models: [{ name: 'gemini-model', image: true, thinking: { mode: 'auto' } }],
+        },
+      ],
+    });
+
+    await providersApi.saveGeminiKeys([
+      {
+        apiKey: 'gemini-key',
+        models: [{ name: 'gemini-model', alias: 'gemini-alias' }],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/gemini-api-key', [
+      {
+        'api-key': 'gemini-key',
+        'disable-cooling': true,
+        models: [
+          {
+            name: 'gemini-model',
+            alias: 'gemini-alias',
+            image: true,
+            thinking: { mode: 'auto' },
+          },
+        ],
+      },
+    ]);
+
+    mocks.get.mockResolvedValueOnce({
+      'codex-api-key': [
+        {
+          'auth-index': 'codex-auth',
+          'disable-cooling': true,
+          models: [{ name: 'codex-model', image: true, thinking: { budget_tokens: 2048 } }],
+        },
+      ],
+    });
+
+    await providersApi.saveCodexConfigs([
+      {
+        apiKey: '',
+        authIndex: 'codex-auth',
+        models: [{ name: 'codex-model', alias: 'codex-alias' }],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/codex-api-key', [
+      {
+        'auth-index': 'codex-auth',
+        'disable-cooling': true,
+        models: [
+          {
+            name: 'codex-model',
+            alias: 'codex-alias',
+            image: true,
+            thinking: { budget_tokens: 2048 },
+          },
+        ],
+      },
+    ]);
+
+    mocks.get.mockResolvedValueOnce({
+      'claude-api-key': [
+        {
+          'auth-index': 'claude-auth',
+          'disable-cooling': true,
+          'experimental-cch-signing': true,
+          cloak: { mode: 'auto', 'cache-user-id': true },
+          models: [{ name: 'claude-model', image: true, thinking: { enabled: true } }],
+        },
+      ],
+    });
+
+    await providersApi.saveClaudeConfigs([
+      {
+        apiKey: '',
+        authIndex: 'claude-auth',
+        cloak: { mode: 'always' },
+        models: [{ name: 'claude-model', alias: 'claude-alias' }],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      {
+        'auth-index': 'claude-auth',
+        'disable-cooling': true,
+        'experimental-cch-signing': true,
+        cloak: { mode: 'always', 'cache-user-id': true },
+        models: [
+          {
+            name: 'claude-model',
+            alias: 'claude-alias',
+            image: true,
+            thinking: { enabled: true },
+          },
+        ],
+      },
+    ]);
+
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'api-key-entries': [],
+          'disable-cooling': true,
+          models: [{ name: 'openai-model', image: true, thinking: { effort: 'medium' } }],
+        },
+      ],
+    });
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [],
+        models: [{ name: 'openai-model', alias: 'openai-alias' }],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        'disable-cooling': true,
+        models: [
+          {
+            name: 'openai-model',
+            alias: 'openai-alias',
+            image: true,
+            thinking: { effort: 'medium' },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('lets explicit false values override preserved raw booleans', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'api-key-entries': [],
+          'disable-cooling': true,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [],
+        disableCooling: false,
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        'disable-cooling': false,
+      },
+    ]);
+  });
+
+  it('preserves model metadata by index when model names change', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'api-key-entries': [],
+          models: [
+            {
+              name: 'old-model',
+              image: true,
+              thinking: { effort: 'high' },
+            },
+          ],
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [],
+        models: [{ name: 'new-model', alias: 'new-alias' }],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        models: [
+          {
+            name: 'new-model',
+            alias: 'new-alias',
+            image: true,
+            thinking: { effort: 'high' },
+          },
+        ],
+      },
+    ]);
+  });
+});

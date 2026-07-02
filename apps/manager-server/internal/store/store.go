@@ -3,12 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/accountaction"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/apikeyalias"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/codexinspection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/deadletter"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/modelprice"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotacooldown"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/setting"
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageevent"
@@ -32,6 +35,11 @@ type InsertResult = model.InsertResult
 type ModelPrice = model.ModelPrice
 type ModelPriceSyncResult = model.ModelPriceSyncResult
 type APIKeyAlias = model.APIKeyAlias
+type QuotaCooldown = model.QuotaCooldown
+type QuotaCooldownUpsert = model.QuotaCooldownUpsert
+type AccountActionCandidate = model.AccountActionCandidate
+type AccountActionCandidateUpsert = model.AccountActionCandidateUpsert
+type AutomationSettings = model.AutomationSettings
 
 var DefaultCodexInspectionConfig = model.DefaultCodexInspectionConfig
 var NormalizeCodexInspectionConfig = model.NormalizeCodexInspectionConfig
@@ -42,14 +50,21 @@ type ModelStat = usageevent.ModelStat
 type RecentFailure = usageevent.RecentFailure
 type AnalyticsFilter = usageevent.AnalyticsFilter
 type TimelinePoint = usageevent.TimelinePoint
+type LatencyPercentiles = usageevent.LatencyPercentiles
+type LatencySummary = usageevent.LatencySummary
 type HourlyPoint = usageevent.HourlyPoint
+type FilterOptionValues = usageevent.FilterOptionValues
+type HeatmapPoint = usageevent.HeatmapPoint
 type ChannelModelStat = usageevent.ChannelModelStat
 type FailureSourceStat = usageevent.FailureSourceStat
 type AccountModelStat = usageevent.AccountModelStat
+type CredentialModelStat = usageevent.CredentialModelStat
+type CredentialTimelinePoint = usageevent.CredentialTimelinePoint
 type APIKeyModelStat = usageevent.APIKeyModelStat
 type TaskBucket = usageevent.TaskBucket
 type EventPageItem = usageevent.EventPageItem
 type EventsPage = usageevent.EventsPage
+type HeaderSnapshot = usageevent.HeaderSnapshot
 
 type Store struct {
 	db *sql.DB
@@ -59,7 +74,9 @@ type Store struct {
 	DeadLetters      deadletter.Repository
 	ModelPrices      modelprice.Repository
 	APIKeyAliases    apikeyalias.Repository
+	AccountActions   accountaction.Repository
 	CodexInspections codexinspection.Repository
+	QuotaCooldowns   quotacooldown.Repository
 }
 
 func Open(path string, protector ...*security.Protector) (*Store, error) {
@@ -78,7 +95,9 @@ func New(db *sql.DB, protector ...*security.Protector) *Store {
 		DeadLetters:      deadletter.New(db),
 		ModelPrices:      modelprice.New(db),
 		APIKeyAliases:    apikeyalias.New(db),
+		AccountActions:   accountaction.New(db),
 		CodexInspections: codexinspection.New(db),
+		QuotaCooldowns:   quotacooldown.New(db),
 	}
 }
 
@@ -103,6 +122,14 @@ func (s *Store) SaveManagerConfig(ctx context.Context, cfg ManagerConfig) error 
 
 func (s *Store) LoadManagerConfig(ctx context.Context) (ManagerConfig, bool, error) {
 	return s.Settings.LoadManagerConfig(ctx)
+}
+
+func (s *Store) SaveAutomationSettings(ctx context.Context, settings AutomationSettings) (AutomationSettings, error) {
+	return s.Settings.SaveAutomationSettings(ctx, settings)
+}
+
+func (s *Store) LoadAutomationSettings(ctx context.Context) (AutomationSettings, bool, error) {
+	return s.Settings.LoadAutomationSettings(ctx)
 }
 
 func (s *Store) SaveAdminCredential(ctx context.Context, credential AdminCredential) error {
@@ -153,6 +180,34 @@ func (s *Store) DeleteAPIKeyAlias(ctx context.Context, apiKeyHash string) error 
 	return s.APIKeyAliases.Delete(ctx, apiKeyHash)
 }
 
+func (s *Store) UpsertAccountActionCandidate(ctx context.Context, input AccountActionCandidateUpsert) (AccountActionCandidate, error) {
+	return s.AccountActions.Upsert(ctx, input)
+}
+
+func (s *Store) ListAccountActionCandidates(ctx context.Context, status string, limit int) ([]AccountActionCandidate, error) {
+	return s.AccountActions.List(ctx, status, limit)
+}
+
+func (s *Store) CountAccountActionCandidates(ctx context.Context, status string) (int64, error) {
+	return s.AccountActions.Count(ctx, status)
+}
+
+func (s *Store) GetAccountActionCandidate(ctx context.Context, id int64) (AccountActionCandidate, bool, error) {
+	return s.AccountActions.Get(ctx, id)
+}
+
+func (s *Store) UpdateAccountActionCandidateStatus(ctx context.Context, id int64, status string) (AccountActionCandidate, error) {
+	return s.AccountActions.UpdateStatus(ctx, id, status)
+}
+
+func (s *Store) UpdatePendingAccountActionCandidateStatus(ctx context.Context, id int64, status string) (AccountActionCandidate, error) {
+	return s.AccountActions.UpdatePendingStatus(ctx, id, status)
+}
+
+func (s *Store) RecordAccountActionCandidateFailure(ctx context.Context, id int64, reason string) error {
+	return s.AccountActions.RecordFailure(ctx, id, reason)
+}
+
 func (s *Store) CreateCodexInspectionRun(ctx context.Context, run CodexInspectionRun) (CodexInspectionRun, error) {
 	return s.CodexInspections.CreateRun(ctx, run)
 }
@@ -193,12 +248,36 @@ func (s *Store) InsertEvents(ctx context.Context, events []usage.Event) (InsertR
 	return s.UsageEvents.InsertBatch(ctx, events)
 }
 
+func (s *Store) UpsertQuotaCooldown(ctx context.Context, cooldown QuotaCooldownUpsert) (QuotaCooldown, error) {
+	return s.QuotaCooldowns.UpsertActive(ctx, cooldown)
+}
+
+func (s *Store) ListDueQuotaCooldowns(ctx context.Context, nowMS int64, limit int) ([]QuotaCooldown, error) {
+	return s.QuotaCooldowns.ListDue(ctx, nowMS, limit)
+}
+
+func (s *Store) MarkQuotaCooldownRecovered(ctx context.Context, id int64, recoveredAtMS int64) error {
+	return s.QuotaCooldowns.MarkRecovered(ctx, id, recoveredAtMS)
+}
+
+func (s *Store) MarkQuotaCooldownSkipped(ctx context.Context, id int64, reason string) error {
+	return s.QuotaCooldowns.MarkSkipped(ctx, id, reason)
+}
+
+func (s *Store) RecordQuotaCooldownFailure(ctx context.Context, id int64, reason string) error {
+	return s.QuotaCooldowns.RecordFailure(ctx, id, reason)
+}
+
 func (s *Store) AddDeadLetter(ctx context.Context, payload string, parseErr error) error {
 	return s.DeadLetters.Insert(ctx, payload, parseErr.Error())
 }
 
 func (s *Store) RecentEvents(ctx context.Context, limit int) ([]usage.Event, error) {
 	return s.UsageEvents.ListRecent(ctx, limit)
+}
+
+func (s *Store) BackfillUsageResponseMetadata(ctx context.Context, batchLimit int) (int, error) {
+	return s.UsageEvents.BackfillResponseMetadata(ctx, batchLimit)
 }
 
 func (s *Store) Counts(ctx context.Context) (events int64, deadLetters int64, err error) {
@@ -253,12 +332,28 @@ func (s *Store) ModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter
 	return s.UsageEvents.ModelStatsWithFilter(ctx, filter, limit)
 }
 
-func (s *Store) TimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string) ([]TimelinePoint, error) {
-	return s.UsageEvents.TimelineWithFilter(ctx, filter, granularity)
+func (s *Store) TimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]TimelinePoint, error) {
+	return s.UsageEvents.TimelineWithFilter(ctx, filter, granularity, location)
 }
 
-func (s *Store) HourlyDistributionWithFilter(ctx context.Context, filter AnalyticsFilter) ([]HourlyPoint, error) {
-	return s.UsageEvents.HourlyDistributionWithFilter(ctx, filter)
+func (s *Store) LatencyPercentilesWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]LatencyPercentiles, error) {
+	return s.UsageEvents.LatencyPercentilesWithFilter(ctx, filter, granularity, location)
+}
+
+func (s *Store) LatencySummaryWithFilter(ctx context.Context, filter AnalyticsFilter) (LatencySummary, error) {
+	return s.UsageEvents.LatencySummaryWithFilter(ctx, filter)
+}
+
+func (s *Store) HourlyDistributionWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) ([]HourlyPoint, error) {
+	return s.UsageEvents.HourlyDistributionWithFilter(ctx, filter, location)
+}
+
+func (s *Store) FilterOptionValuesWithFilter(ctx context.Context, filter AnalyticsFilter) (FilterOptionValues, error) {
+	return s.UsageEvents.FilterOptionValuesWithFilter(ctx, filter)
+}
+
+func (s *Store) HeatmapWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) ([]HeatmapPoint, error) {
+	return s.UsageEvents.HeatmapWithFilter(ctx, filter, location)
 }
 
 func (s *Store) ChannelModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]ChannelModelStat, error) {
@@ -271,6 +366,14 @@ func (s *Store) FailureSourcesWithFilter(ctx context.Context, filter AnalyticsFi
 
 func (s *Store) AccountModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]AccountModelStat, error) {
 	return s.UsageEvents.AccountModelStatsWithFilter(ctx, filter)
+}
+
+func (s *Store) CredentialModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]CredentialModelStat, error) {
+	return s.UsageEvents.CredentialModelStatsWithFilter(ctx, filter)
+}
+
+func (s *Store) CredentialTimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]CredentialTimelinePoint, error) {
+	return s.UsageEvents.CredentialTimelineWithFilter(ctx, filter, granularity, location)
 }
 
 func (s *Store) APIKeyModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, error) {
@@ -293,8 +396,12 @@ func (s *Store) EventsCountWithFilter(ctx context.Context, filter AnalyticsFilte
 	return s.UsageEvents.EventsCountWithFilter(ctx, filter)
 }
 
-func (s *Store) ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter) (int64, error) {
-	return s.UsageEvents.ActiveDaysWithFilter(ctx, filter)
+func (s *Store) LatestHeaderSnapshots(ctx context.Context, sinceMS int64, limit int) ([]HeaderSnapshot, error) {
+	return s.UsageEvents.LatestHeaderSnapshots(ctx, sinceMS, limit)
+}
+
+func (s *Store) ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) (int64, error) {
+	return s.UsageEvents.ActiveDaysWithFilter(ctx, filter, location)
 }
 
 func (s *Store) ZeroTokenModelsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]string, error) {

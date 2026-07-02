@@ -4,7 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
 const (
@@ -13,22 +17,32 @@ const (
 )
 
 type AnalyticsFilter struct {
-	FromMS            int64
-	ToMS              int64
-	SearchQuery       string
-	SearchAPIKeyHash  string
-	Models            []string
-	Providers         []string
-	Accounts          []string
-	AuthIndices       []string
-	APIKeyHashes      []string
-	SourceHashes      []string
-	IncludeFailed     bool
-	FailedOnly        bool
-	ExcludeZeroTokens bool
+	FromMS           int64
+	ToMS             int64
+	SearchQuery      string
+	SearchAPIKeyHash string
+	Models           []string
+	Providers        []string
+	Accounts         []string
+	AuthFiles        []string
+	AuthIndices      []string
+	APIKeyHashes     []string
+	SourceHashes     []string
+	ProjectIDs       []string
+	RequestTypes     []string
+	IncludeFailed    bool
+	FailedOnly       bool
+	MinLatencyMS     int64
+	CacheStatus      string
+	HeaderErrorKinds []string
+	HeaderErrorCodes []string
+	HeaderQuotaPlans []string
+	HeaderTraceIDs   []string
 }
 
 var analyticsSearchTextColumns = []string{
+	"request_id",
+	"event_hash",
 	"model",
 	"resolved_model",
 	"endpoint",
@@ -47,20 +61,76 @@ var analyticsSearchTextColumns = []string{
 	"service_tier",
 	"executor_type",
 	"fail_summary",
+	"header_quota_plan_type",
+	"header_error_kind",
+	"header_error_code",
+	"header_trace_id",
+}
+
+type LatencyPercentiles struct {
+	BucketMS     int64
+	P95LatencyMS sql.NullFloat64
+	P95TTFTMS    sql.NullFloat64
+}
+
+type LatencySummary struct {
+	P95LatencyMS sql.NullFloat64
+	P95TTFTMS    sql.NullFloat64
+}
+
+type FilterOptionValues struct {
+	Providers        []string
+	AuthFiles        []string
+	ProjectIDs       []string
+	RequestTypes     []string
+	HeaderErrorKinds []string
+	HeaderErrorCodes []string
+	HeaderQuotaPlans []string
+	HeaderTraceIDs   []string
 }
 
 type TimelinePoint struct {
-	BucketMS int64
-	Calls    int64
-	Tokens   int64
-	Success  int64
-	Failure  int64
+	BucketMS            int64
+	Model               string
+	BillingModel        string
+	ServiceTier         string
+	Calls               int64
+	Tokens              int64
+	Success             int64
+	Failure             int64
+	InputTokens         int64
+	OutputTokens        int64
+	ReasoningTokens     int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	AvgLatencyMS        sql.NullFloat64
+	LatencySamples      int64
 }
 
 type HourlyPoint struct {
 	Hour   int
 	Calls  int64
 	Tokens int64
+}
+
+type HeatmapPoint struct {
+	Weekday             int
+	Hour                int
+	Model               string
+	BillingModel        string
+	ServiceTier         string
+	APIKeyHash          string
+	Provider            string
+	Calls               int64
+	SuccessCalls        int64
+	FailureCalls        int64
+	InputTokens         int64
+	OutputTokens        int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
 }
 
 type ChannelModelStat struct {
@@ -122,6 +192,61 @@ type AccountModelStat struct {
 	LatencySamples       int64
 }
 
+type CredentialModelStat struct {
+	ID                    string
+	AuthFileSnapshot      string
+	AuthIndex             string
+	Source                string
+	SourceHash            string
+	AccountSnapshot       string
+	AuthLabelSnapshot     string
+	AuthProviderSnapshot  string
+	AuthProjectIDSnapshot string
+	Model                 string
+	BillingModel          string
+	ServiceTier           string
+	Calls                 int64
+	SuccessCalls          int64
+	FailureCalls          int64
+	InputTokens           int64
+	OutputTokens          int64
+	CachedTokens          int64
+	CacheReadTokens       int64
+	CacheCreationTokens   int64
+	TotalTokens           int64
+	LastSeenMS            int64
+	AvgLatencyMS          sql.NullFloat64
+	LatencySamples        int64
+}
+
+type CredentialTimelinePoint struct {
+	ID                    string
+	AuthFileSnapshot      string
+	AuthIndex             string
+	Source                string
+	SourceHash            string
+	AccountSnapshot       string
+	AuthLabelSnapshot     string
+	AuthProviderSnapshot  string
+	AuthProjectIDSnapshot string
+	BucketMS              int64
+	Model                 string
+	BillingModel          string
+	ServiceTier           string
+	Calls                 int64
+	Tokens                int64
+	Success               int64
+	Failure               int64
+	InputTokens           int64
+	OutputTokens          int64
+	ReasoningTokens       int64
+	CachedTokens          int64
+	CacheReadTokens       int64
+	CacheCreationTokens   int64
+	AvgLatencyMS          sql.NullFloat64
+	LatencySamples        int64
+}
+
 type APIKeyModelStat struct {
 	APIKeyHash           string
 	AccountSnapshot      string
@@ -170,38 +295,47 @@ type TaskBucket struct {
 }
 
 type EventPageItem struct {
-	ID                    int64
-	EventHash             string
-	TimestampMS           int64
-	Timestamp             string
-	Model                 string
-	ResolvedModel         string
-	Endpoint              string
-	Method                string
-	Path                  string
-	AuthIndex             string
-	Source                string
-	SourceHash            string
-	APIKeyHash            string
-	AccountSnapshot       string
-	AuthLabelSnapshot     string
-	AuthProviderSnapshot  string
-	AuthProjectIDSnapshot string
-	ReasoningEffort       string
-	ServiceTier           string
-	ExecutorType          string
-	InputTokens           int64
-	OutputTokens          int64
-	CachedTokens          int64
-	CacheReadTokens       int64
-	CacheCreationTokens   int64
-	ReasoningTokens       int64
-	TotalTokens           int64
-	LatencyMS             sql.NullInt64
-	TTFTMS                sql.NullInt64
-	Failed                bool
-	FailStatusCode        sql.NullInt64
-	FailSummary           string
+	ID                     int64
+	RequestID              string
+	EventHash              string
+	TimestampMS            int64
+	Timestamp              string
+	Model                  string
+	ResolvedModel          string
+	Endpoint               string
+	Method                 string
+	Path                   string
+	AuthIndex              string
+	Source                 string
+	SourceHash             string
+	APIKeyHash             string
+	AccountSnapshot        string
+	AuthLabelSnapshot      string
+	AuthFileSnapshot       string
+	AuthProviderSnapshot   string
+	AuthProjectIDSnapshot  string
+	ReasoningEffort        string
+	ServiceTier            string
+	ExecutorType           string
+	InputTokens            int64
+	OutputTokens           int64
+	CachedTokens           int64
+	CacheReadTokens        int64
+	CacheCreationTokens    int64
+	ReasoningTokens        int64
+	TotalTokens            int64
+	LatencyMS              sql.NullInt64
+	TTFTMS                 sql.NullInt64
+	Failed                 bool
+	FailStatusCode         sql.NullInt64
+	FailSummary            string
+	ResponseMetadata       *usage.ResponseHeaderMetadata
+	HeaderQuotaRecoverAtMS sql.NullInt64
+	HeaderQuotaUsedPercent sql.NullFloat64
+	HeaderQuotaPlanType    string
+	HeaderErrorKind        string
+	HeaderErrorCode        string
+	HeaderTraceID          string
 }
 
 type EventsPage struct {
@@ -211,10 +345,31 @@ type EventsPage struct {
 	HasMore      bool
 }
 
+type HeaderSnapshot struct {
+	ID                     int64
+	EventHash              string
+	TimestampMS            int64
+	AuthFileSnapshot       string
+	AuthIndex              string
+	AccountSnapshot        string
+	AuthLabelSnapshot      string
+	AuthProviderSnapshot   string
+	AuthProjectIDSnapshot  string
+	Source                 string
+	SourceHash             string
+	ResponseMetadata       *usage.ResponseHeaderMetadata
+	HeaderQuotaRecoverAtMS sql.NullInt64
+	HeaderQuotaUsedPercent sql.NullFloat64
+	HeaderQuotaPlanType    string
+	HeaderErrorKind        string
+	HeaderErrorCode        string
+	HeaderTraceID          string
+}
+
 func (r *repository) AggregateWithFilter(ctx context.Context, filter AnalyticsFilter) (Aggregate, error) {
 	where, args := analyticsWhere(filter)
 	row := r.db.QueryRowContext(ctx, `select
-	count(*),
+	count(*) as calls,
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
 	coalesce(sum(input_tokens), 0),
@@ -329,61 +484,471 @@ order by max(t.model_calls) desc, f.model, calls desc`
 	return stats, rows.Err()
 }
 
-func (r *repository) TimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string) ([]TimelinePoint, error) {
-	bucketSize := int64(60 * 60 * 1000)
-	if granularity == "day" {
-		bucketSize = 24 * 60 * 60 * 1000
+func resolveBucketMS(timestampMS int64, granularity string, location *time.Location) int64 {
+	if location == nil {
+		location = time.UTC
 	}
+	tm := time.UnixMilli(timestampMS).In(location)
+	if granularity == "day" {
+		return time.Date(tm.Year(), tm.Month(), tm.Day(), 0, 0, 0, 0, location).UnixMilli()
+	}
+	return time.Date(tm.Year(), tm.Month(), tm.Day(), tm.Hour(), 0, 0, 0, location).UnixMilli()
+}
+
+func (r *repository) TimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]TimelinePoint, error) {
 	where, args := analyticsWhere(filter)
 	query := fmt.Sprintf(`select
-	(timestamp_ms / %d) * %d as bucket_ms,
-	count(*),
-	coalesce(sum(total_tokens), 0),
-	sum(case when failed = 0 then 1 else 0 end),
-	sum(case when failed = 1 then 1 else 0 end)
+	timestamp_ms,
+	model,
+	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	coalesce(service_tier, '') as service_tier,
+	failed,
+	input_tokens,
+	output_tokens,
+	reasoning_tokens,
+	`+compatCachedExpr+`,
+	cache_read_tokens,
+	cache_creation_tokens,
+	total_tokens,
+	latency_ms
 from usage_events %s
-group by bucket_ms
-order by bucket_ms`, bucketSize, bucketSize, where)
+order by timestamp_ms, model`, where)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	points := make([]TimelinePoint, 0)
+	type key struct {
+		bucketMS     int64
+		model        string
+		billingModel string
+		serviceTier  string
+	}
+	grouped := map[key]*TimelinePoint{}
+	order := make([]key, 0)
 	for rows.Next() {
-		var point TimelinePoint
-		if err := rows.Scan(&point.BucketMS, &point.Calls, &point.Tokens, &point.Success, &point.Failure); err != nil {
+		var timestampMS int64
+		var model string
+		var billingModel string
+		var serviceTier string
+		var failed int
+		var latency sql.NullFloat64
+		var inputTokens int64
+		var outputTokens int64
+		var reasoningTokens int64
+		var cachedTokens int64
+		var cacheReadTokens int64
+		var cacheCreationTokens int64
+		var totalTokens int64
+		if err := rows.Scan(
+			&timestampMS,
+			&model,
+			&billingModel,
+			&serviceTier,
+			&failed,
+			&inputTokens,
+			&outputTokens,
+			&reasoningTokens,
+			&cachedTokens,
+			&cacheReadTokens,
+			&cacheCreationTokens,
+			&totalTokens,
+			&latency,
+		); err != nil {
 			return nil, err
 		}
-		points = append(points, point)
+		mapKey := key{
+			bucketMS:     resolveBucketMS(timestampMS, granularity, location),
+			model:        model,
+			billingModel: billingModel,
+			serviceTier:  serviceTier,
+		}
+		point := grouped[mapKey]
+		if point == nil {
+			point = &TimelinePoint{
+				BucketMS:     mapKey.bucketMS,
+				Model:        model,
+				BillingModel: billingModel,
+				ServiceTier:  serviceTier,
+			}
+			grouped[mapKey] = point
+			order = append(order, mapKey)
+		}
+		point.Calls += 1
+		point.Tokens += totalTokens
+		if failed != 0 {
+			point.Failure += 1
+		} else {
+			point.Success += 1
+		}
+		point.InputTokens += inputTokens
+		point.OutputTokens += outputTokens
+		point.ReasoningTokens += reasoningTokens
+		point.CachedTokens += cachedTokens
+		point.CacheReadTokens += cacheReadTokens
+		point.CacheCreationTokens += cacheCreationTokens
+		if latency.Valid && latency.Float64 > 0 {
+			point.AvgLatencyMS.Float64 += latency.Float64
+			point.LatencySamples += 1
+		}
 	}
-	return points, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	points := make([]TimelinePoint, 0, len(order))
+	for _, mapKey := range order {
+		point := grouped[mapKey]
+		if point.LatencySamples > 0 {
+			point.AvgLatencyMS.Float64 = point.AvgLatencyMS.Float64 / float64(point.LatencySamples)
+			point.AvgLatencyMS.Valid = true
+		}
+		points = append(points, *point)
+	}
+	return points, nil
 }
 
-func (r *repository) HourlyDistributionWithFilter(ctx context.Context, filter AnalyticsFilter) ([]HourlyPoint, error) {
+func (r *repository) LatencyPercentilesWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]LatencyPercentiles, error) {
 	where, args := analyticsWhere(filter)
-	rows, err := r.db.QueryContext(ctx, `select
-	cast(strftime('%H', datetime(timestamp_ms / 1000, 'unixepoch')) as integer) as hour,
-	count(*),
-	coalesce(sum(total_tokens), 0)
-from usage_events `+where+`
-group by hour
-order by hour`, args...)
+	query := fmt.Sprintf(`select
+	timestamp_ms,
+	latency_ms,
+	ttft_ms
+from usage_events %s
+and (latency_ms > 0 or ttft_ms > 0)
+order by timestamp_ms`, where)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	points := make([]HourlyPoint, 0)
+	type samples struct {
+		latencies []float64
+		ttfts     []float64
+	}
+	grouped := map[int64]*samples{}
+	order := make([]int64, 0)
 	for rows.Next() {
-		var point HourlyPoint
-		if err := rows.Scan(&point.Hour, &point.Calls, &point.Tokens); err != nil {
+		var timestampMS int64
+		var latency sql.NullFloat64
+		var ttft sql.NullFloat64
+		if err := rows.Scan(&timestampMS, &latency, &ttft); err != nil {
 			return nil, err
 		}
-		points = append(points, point)
+		bucketMS := resolveBucketMS(timestampMS, granularity, location)
+		entry := grouped[bucketMS]
+		if entry == nil {
+			entry = &samples{}
+			grouped[bucketMS] = entry
+			order = append(order, bucketMS)
+		}
+		if latency.Valid && latency.Float64 > 0 {
+			entry.latencies = append(entry.latencies, latency.Float64)
+		}
+		if ttft.Valid && ttft.Float64 > 0 {
+			entry.ttfts = append(entry.ttfts, ttft.Float64)
+		}
 	}
-	return points, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	result := make([]LatencyPercentiles, 0, len(order))
+	for _, bucketMS := range order {
+		entry := grouped[bucketMS]
+		point := LatencyPercentiles{BucketMS: bucketMS}
+		if value, ok := percentile95(entry.latencies); ok {
+			point.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
+		}
+		if value, ok := percentile95(entry.ttfts); ok {
+			point.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
+		}
+		result = append(result, point)
+	}
+	return result, nil
+}
+
+func (r *repository) LatencySummaryWithFilter(ctx context.Context, filter AnalyticsFilter) (LatencySummary, error) {
+	where, args := analyticsWhere(filter)
+	rows, err := r.db.QueryContext(ctx, `select latency_ms, ttft_ms
+from usage_events `+where+`
+and (latency_ms > 0 or ttft_ms > 0)`, args...)
+	if err != nil {
+		return LatencySummary{}, err
+	}
+	defer rows.Close()
+
+	latencies := make([]float64, 0)
+	ttfts := make([]float64, 0)
+	for rows.Next() {
+		var latency sql.NullFloat64
+		var ttft sql.NullFloat64
+		if err := rows.Scan(&latency, &ttft); err != nil {
+			return LatencySummary{}, err
+		}
+		if latency.Valid && latency.Float64 > 0 {
+			latencies = append(latencies, latency.Float64)
+		}
+		if ttft.Valid && ttft.Float64 > 0 {
+			ttfts = append(ttfts, ttft.Float64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return LatencySummary{}, err
+	}
+
+	var summary LatencySummary
+	if value, ok := percentile95(latencies); ok {
+		summary.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
+	}
+	if value, ok := percentile95(ttfts); ok {
+		summary.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
+	}
+	return summary, nil
+}
+
+func percentile95(values []float64) (float64, bool) {
+	if len(values) == 0 {
+		return 0, false
+	}
+	sort.Float64s(values)
+	index := int(float64(len(values))*0.95+0.999999) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return values[index], true
+}
+
+func (r *repository) HourlyDistributionWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) ([]HourlyPoint, error) {
+	if location == nil {
+		location = time.UTC
+	}
+	where, args := analyticsWhere(filter)
+	rows, err := r.db.QueryContext(ctx, `select timestamp_ms, total_tokens
+from usage_events `+where+`
+order by timestamp_ms`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pointsByHour := map[int]*HourlyPoint{}
+	for rows.Next() {
+		var timestampMS int64
+		var totalTokens int64
+		if err := rows.Scan(&timestampMS, &totalTokens); err != nil {
+			return nil, err
+		}
+		hour := time.UnixMilli(timestampMS).In(location).Hour()
+		point := pointsByHour[hour]
+		if point == nil {
+			point = &HourlyPoint{Hour: hour}
+			pointsByHour[hour] = point
+		}
+		point.Calls += 1
+		point.Tokens += totalTokens
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	hours := make([]int, 0, len(pointsByHour))
+	for hour := range pointsByHour {
+		hours = append(hours, hour)
+	}
+	sort.Ints(hours)
+	points := make([]HourlyPoint, 0, len(hours))
+	for _, hour := range hours {
+		point := pointsByHour[hour]
+		points = append(points, *point)
+	}
+	return points, nil
+}
+
+func (r *repository) FilterOptionValuesWithFilter(ctx context.Context, filter AnalyticsFilter) (FilterOptionValues, error) {
+	providers, err := r.distinctFilterValues(ctx, filter, "coalesce(nullif(auth_provider_snapshot, ''), nullif(provider, ''), '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	authFiles, err := r.distinctFilterValues(ctx, filter, "coalesce(auth_file_snapshot, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	projectIDs, err := r.distinctFilterValues(ctx, filter, "coalesce(auth_project_id_snapshot, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	requestTypes, err := r.distinctFilterValues(ctx, filter, "coalesce(executor_type, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	headerErrorKinds, err := r.distinctFilterValues(ctx, filter, "coalesce(header_error_kind, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	headerErrorCodes, err := r.distinctFilterValues(ctx, filter, "coalesce(header_error_code, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	headerQuotaPlans, err := r.distinctFilterValues(ctx, filter, "coalesce(header_quota_plan_type, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	headerTraceIDs, err := r.distinctFilterValues(ctx, filter, "coalesce(header_trace_id, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	return FilterOptionValues{
+		Providers:        providers,
+		AuthFiles:        authFiles,
+		ProjectIDs:       projectIDs,
+		RequestTypes:     requestTypes,
+		HeaderErrorKinds: headerErrorKinds,
+		HeaderErrorCodes: headerErrorCodes,
+		HeaderQuotaPlans: headerQuotaPlans,
+		HeaderTraceIDs:   headerTraceIDs,
+	}, nil
+}
+
+func (r *repository) distinctFilterValues(ctx context.Context, filter AnalyticsFilter, expression string) ([]string, error) {
+	where, args := analyticsWhere(filter)
+	rows, err := r.db.QueryContext(ctx, `select distinct `+expression+` as value
+from usage_events `+where+`
+and `+expression+` <> ''
+order by value`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	values := make([]string, 0)
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (r *repository) HeatmapWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) ([]HeatmapPoint, error) {
+	where, args := analyticsWhere(filter)
+	rows, err := r.db.QueryContext(ctx, `select
+	timestamp_ms,
+	model,
+	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	coalesce(service_tier, '') as service_tier,
+	coalesce(api_key_hash, ''),
+	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+	failed,
+	input_tokens,
+	output_tokens,
+	`+compatCachedExpr+`,
+	cache_read_tokens,
+	cache_creation_tokens,
+	total_tokens
+from usage_events `+where+`
+order by timestamp_ms, model`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if location == nil {
+		location = time.UTC
+	}
+	type key struct {
+		weekday      int
+		hour         int
+		model        string
+		billingModel string
+		serviceTier  string
+		apiKeyHash   string
+		provider     string
+	}
+	grouped := map[key]*HeatmapPoint{}
+	order := make([]key, 0)
+	for rows.Next() {
+		var timestampMS int64
+		var model string
+		var billingModel string
+		var serviceTier string
+		var apiKeyHash string
+		var provider string
+		var failed int
+		var inputTokens int64
+		var outputTokens int64
+		var cachedTokens int64
+		var cacheReadTokens int64
+		var cacheCreationTokens int64
+		var totalTokens int64
+		if err := rows.Scan(
+			&timestampMS,
+			&model,
+			&billingModel,
+			&serviceTier,
+			&apiKeyHash,
+			&provider,
+			&failed,
+			&inputTokens,
+			&outputTokens,
+			&cachedTokens,
+			&cacheReadTokens,
+			&cacheCreationTokens,
+			&totalTokens,
+		); err != nil {
+			return nil, err
+		}
+		tm := time.UnixMilli(timestampMS).In(location)
+		mapKey := key{
+			weekday:      int(tm.Weekday()),
+			hour:         tm.Hour(),
+			model:        model,
+			billingModel: billingModel,
+			serviceTier:  serviceTier,
+			apiKeyHash:   apiKeyHash,
+			provider:     provider,
+		}
+		point := grouped[mapKey]
+		if point == nil {
+			point = &HeatmapPoint{
+				Weekday:      mapKey.weekday,
+				Hour:         mapKey.hour,
+				Model:        model,
+				BillingModel: billingModel,
+				ServiceTier:  serviceTier,
+				APIKeyHash:   apiKeyHash,
+				Provider:     provider,
+			}
+			grouped[mapKey] = point
+			order = append(order, mapKey)
+		}
+		point.Calls += 1
+		if failed != 0 {
+			point.FailureCalls += 1
+		} else {
+			point.SuccessCalls += 1
+		}
+		point.InputTokens += inputTokens
+		point.OutputTokens += outputTokens
+		point.CachedTokens += cachedTokens
+		point.CacheReadTokens += cacheReadTokens
+		point.CacheCreationTokens += cacheCreationTokens
+		point.TotalTokens += totalTokens
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	points := make([]HeatmapPoint, 0, len(order))
+	for _, mapKey := range order {
+		points = append(points, *grouped[mapKey])
+	}
+	return points, nil
 }
 
 func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]ChannelModelStat, error) {
@@ -556,6 +1121,218 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 	return stats, rows.Err()
 }
 
+func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]CredentialModelStat, error) {
+	where, args := analyticsWhere(filter)
+	rows, err := r.db.QueryContext(ctx, `select
+	coalesce(nullif(auth_file_snapshot, ''), nullif(auth_index, ''), nullif(source_hash, ''), nullif(source, ''), '-') as credential_id,
+	coalesce(auth_file_snapshot, ''),
+	coalesce(auth_index, ''),
+	coalesce(max(source), ''),
+	coalesce(source_hash, ''),
+	coalesce(max(account_snapshot), ''),
+	coalesce(max(auth_label_snapshot), ''),
+	coalesce(nullif(max(auth_provider_snapshot), ''), max(provider), ''),
+	coalesce(max(auth_project_id_snapshot), ''),
+	model,
+	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	coalesce(service_tier, '') as service_tier,
+	count(*),
+	sum(case when failed = 0 then 1 else 0 end),
+	sum(case when failed = 1 then 1 else 0 end),
+	coalesce(sum(input_tokens), 0),
+	coalesce(sum(output_tokens), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(total_tokens), 0),
+	max(timestamp_ms),
+	avg(nullif(latency_ms, 0)),
+	count(nullif(latency_ms, 0))
+from usage_events `+where+`
+group by credential_id, auth_file_snapshot, auth_index, source_hash, model, billing_model, coalesce(service_tier, '')
+order by max(timestamp_ms) desc, count(*) desc`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make([]CredentialModelStat, 0)
+	for rows.Next() {
+		var stat CredentialModelStat
+		if err := rows.Scan(
+			&stat.ID,
+			&stat.AuthFileSnapshot,
+			&stat.AuthIndex,
+			&stat.Source,
+			&stat.SourceHash,
+			&stat.AccountSnapshot,
+			&stat.AuthLabelSnapshot,
+			&stat.AuthProviderSnapshot,
+			&stat.AuthProjectIDSnapshot,
+			&stat.Model,
+			&stat.BillingModel,
+			&stat.ServiceTier,
+			&stat.Calls,
+			&stat.SuccessCalls,
+			&stat.FailureCalls,
+			&stat.InputTokens,
+			&stat.OutputTokens,
+			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
+			&stat.TotalTokens,
+			&stat.LastSeenMS,
+			&stat.AvgLatencyMS,
+			&stat.LatencySamples,
+		); err != nil {
+			return nil, err
+		}
+		stats = append(stats, stat)
+	}
+	return stats, rows.Err()
+}
+
+func (r *repository) CredentialTimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]CredentialTimelinePoint, error) {
+	where, args := analyticsWhere(filter)
+	query := fmt.Sprintf(`select
+	timestamp_ms,
+	coalesce(nullif(auth_file_snapshot, ''), nullif(auth_index, ''), nullif(source_hash, ''), nullif(source, ''), '-') as credential_id,
+	coalesce(auth_file_snapshot, ''),
+	coalesce(auth_index, ''),
+	coalesce(source, ''),
+	coalesce(source_hash, ''),
+	coalesce(account_snapshot, ''),
+	coalesce(auth_label_snapshot, ''),
+	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+	coalesce(auth_project_id_snapshot, ''),
+	model,
+	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	coalesce(service_tier, '') as service_tier,
+	failed,
+	input_tokens,
+	output_tokens,
+	reasoning_tokens,
+	`+compatCachedExpr+`,
+	cache_read_tokens,
+	cache_creation_tokens,
+	total_tokens,
+	latency_ms
+from usage_events %s
+order by timestamp_ms, credential_id, model`, where)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type key struct {
+		id               string
+		authFileSnapshot string
+		authIndex        string
+		sourceHash       string
+		bucketMS         int64
+		model            string
+		billingModel     string
+		serviceTier      string
+	}
+	grouped := map[key]*CredentialTimelinePoint{}
+	order := make([]key, 0)
+	for rows.Next() {
+		var timestampMS int64
+		var point CredentialTimelinePoint
+		var failed int
+		var latency sql.NullFloat64
+		var totalTokens int64
+		if err := rows.Scan(
+			&timestampMS,
+			&point.ID,
+			&point.AuthFileSnapshot,
+			&point.AuthIndex,
+			&point.Source,
+			&point.SourceHash,
+			&point.AccountSnapshot,
+			&point.AuthLabelSnapshot,
+			&point.AuthProviderSnapshot,
+			&point.AuthProjectIDSnapshot,
+			&point.Model,
+			&point.BillingModel,
+			&point.ServiceTier,
+			&failed,
+			&point.InputTokens,
+			&point.OutputTokens,
+			&point.ReasoningTokens,
+			&point.CachedTokens,
+			&point.CacheReadTokens,
+			&point.CacheCreationTokens,
+			&totalTokens,
+			&latency,
+		); err != nil {
+			return nil, err
+		}
+		bucketMS := resolveBucketMS(timestampMS, granularity, location)
+		mapKey := key{
+			id:               point.ID,
+			authFileSnapshot: point.AuthFileSnapshot,
+			authIndex:        point.AuthIndex,
+			sourceHash:       point.SourceHash,
+			bucketMS:         bucketMS,
+			model:            point.Model,
+			billingModel:     point.BillingModel,
+			serviceTier:      point.ServiceTier,
+		}
+		entry := grouped[mapKey]
+		if entry == nil {
+			entry = &CredentialTimelinePoint{
+				ID:                    point.ID,
+				AuthFileSnapshot:      point.AuthFileSnapshot,
+				AuthIndex:             point.AuthIndex,
+				Source:                point.Source,
+				SourceHash:            point.SourceHash,
+				AccountSnapshot:       point.AccountSnapshot,
+				AuthLabelSnapshot:     point.AuthLabelSnapshot,
+				AuthProviderSnapshot:  point.AuthProviderSnapshot,
+				AuthProjectIDSnapshot: point.AuthProjectIDSnapshot,
+				BucketMS:              bucketMS,
+				Model:                 point.Model,
+				BillingModel:          point.BillingModel,
+				ServiceTier:           point.ServiceTier,
+			}
+			grouped[mapKey] = entry
+			order = append(order, mapKey)
+		}
+		entry.Calls += 1
+		entry.Tokens += totalTokens
+		if failed != 0 {
+			entry.Failure += 1
+		} else {
+			entry.Success += 1
+		}
+		entry.InputTokens += point.InputTokens
+		entry.OutputTokens += point.OutputTokens
+		entry.ReasoningTokens += point.ReasoningTokens
+		entry.CachedTokens += point.CachedTokens
+		entry.CacheReadTokens += point.CacheReadTokens
+		entry.CacheCreationTokens += point.CacheCreationTokens
+		if latency.Valid && latency.Float64 > 0 {
+			entry.AvgLatencyMS.Float64 += latency.Float64
+			entry.LatencySamples += 1
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	points := make([]CredentialTimelinePoint, 0, len(order))
+	for _, mapKey := range order {
+		point := grouped[mapKey]
+		if point.LatencySamples > 0 {
+			point.AvgLatencyMS.Float64 = point.AvgLatencyMS.Float64 / float64(point.LatencySamples)
+			point.AvgLatencyMS.Valid = true
+		}
+		points = append(points, *point)
+	}
+	return points, nil
+}
+
 func (r *repository) APIKeyModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, error) {
 	where, args := analyticsWhere(filter)
 	rows, err := r.db.QueryContext(ctx, `select
@@ -706,7 +1483,14 @@ func (r *repository) RecentFailuresWithFilter(ctx context.Context, filter Analyt
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
 	coalesce(auth_project_id_snapshot, ''),
 	fail_status_code,
-	coalesce(fail_summary, '')
+	coalesce(fail_summary, ''),
+	coalesce(response_metadata_json, ''),
+	header_quota_recover_at_ms,
+	header_quota_used_percent,
+	coalesce(header_quota_plan_type, ''),
+	coalesce(header_error_kind, ''),
+	coalesce(header_error_code, ''),
+	coalesce(header_trace_id, '')
 from usage_events `+where+`
 and failed = 1
 order by timestamp_ms desc, id desc
@@ -719,6 +1503,7 @@ limit ?`, args...)
 	failures := make([]RecentFailure, 0, limit)
 	for rows.Next() {
 		var failure RecentFailure
+		var responseMetadataJSON string
 		if err := rows.Scan(
 			&failure.TimestampMS,
 			&failure.Model,
@@ -734,9 +1519,17 @@ limit ?`, args...)
 			&failure.AuthProjectIDSnapshot,
 			&failure.FailStatusCode,
 			&failure.FailSummary,
+			&responseMetadataJSON,
+			&failure.HeaderQuotaRecoverAtMS,
+			&failure.HeaderQuotaUsedPercent,
+			&failure.HeaderQuotaPlanType,
+			&failure.HeaderErrorKind,
+			&failure.HeaderErrorCode,
+			&failure.HeaderTraceID,
 		); err != nil {
 			return nil, err
 		}
+		failure.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
 		failures = append(failures, failure)
 	}
 	return failures, rows.Err()
@@ -776,6 +1569,7 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	args = append(args, queryLimit)
 	rows, err := r.db.QueryContext(ctx, `select
 	id,
+	coalesce(request_id, ''),
 	event_hash,
 	timestamp_ms,
 	timestamp,
@@ -790,6 +1584,7 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(api_key_hash, ''),
 	coalesce(account_snapshot, ''),
 	coalesce(auth_label_snapshot, ''),
+	coalesce(auth_file_snapshot, ''),
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
 	coalesce(auth_project_id_snapshot, ''),
 	coalesce(reasoning_effort, ''),
@@ -806,7 +1601,14 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	ttft_ms,
 	failed,
 	fail_status_code,
-	coalesce(fail_summary, '')
+	coalesce(fail_summary, ''),
+	coalesce(response_metadata_json, ''),
+	header_quota_recover_at_ms,
+	header_quota_used_percent,
+	coalesce(header_quota_plan_type, ''),
+	coalesce(header_error_kind, ''),
+	coalesce(header_error_code, ''),
+	coalesce(header_trace_id, '')
 from usage_events `+where+`
 order by timestamp_ms desc, id desc
 limit ?`, args...)
@@ -819,8 +1621,10 @@ limit ?`, args...)
 	for rows.Next() {
 		var item EventPageItem
 		var failed int
+		var responseMetadataJSON string
 		if err := rows.Scan(
 			&item.ID,
+			&item.RequestID,
 			&item.EventHash,
 			&item.TimestampMS,
 			&item.Timestamp,
@@ -835,6 +1639,7 @@ limit ?`, args...)
 			&item.APIKeyHash,
 			&item.AccountSnapshot,
 			&item.AuthLabelSnapshot,
+			&item.AuthFileSnapshot,
 			&item.AuthProviderSnapshot,
 			&item.AuthProjectIDSnapshot,
 			&item.ReasoningEffort,
@@ -852,10 +1657,18 @@ limit ?`, args...)
 			&failed,
 			&item.FailStatusCode,
 			&item.FailSummary,
+			&responseMetadataJSON,
+			&item.HeaderQuotaRecoverAtMS,
+			&item.HeaderQuotaUsedPercent,
+			&item.HeaderQuotaPlanType,
+			&item.HeaderErrorKind,
+			&item.HeaderErrorCode,
+			&item.HeaderTraceID,
 		); err != nil {
 			return EventsPage{}, err
 		}
 		item.Failed = failed != 0
+		item.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -876,13 +1689,142 @@ limit ?`, args...)
 	return EventsPage{Items: items, NextBeforeMS: nextBeforeMS, NextBeforeID: nextBeforeID, HasMore: hasMore}, nil
 }
 
-func (r *repository) ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter) (int64, error) {
+func (r *repository) LatestHeaderSnapshots(ctx context.Context, sinceMS int64, limit int) ([]HeaderSnapshot, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `with candidates as (
+	select
+		id,
+		event_hash,
+		timestamp_ms,
+		coalesce(auth_file_snapshot, '') as auth_file_snapshot,
+		coalesce(auth_index, '') as auth_index,
+		coalesce(account_snapshot, '') as account_snapshot,
+		coalesce(auth_label_snapshot, '') as auth_label_snapshot,
+		coalesce(nullif(auth_provider_snapshot, ''), provider, '') as auth_provider_snapshot,
+		coalesce(auth_project_id_snapshot, '') as auth_project_id_snapshot,
+		coalesce(source, '') as source,
+		coalesce(source_hash, '') as source_hash,
+		coalesce(response_metadata_json, '') as response_metadata_json,
+		header_quota_recover_at_ms,
+		header_quota_used_percent,
+		coalesce(header_quota_plan_type, '') as header_quota_plan_type,
+		coalesce(header_error_kind, '') as header_error_kind,
+		coalesce(header_error_code, '') as header_error_code,
+		coalesce(header_trace_id, '') as header_trace_id,
+		case
+			when coalesce(auth_file_snapshot, '') <> '' and coalesce(auth_index, '') <> '' then coalesce(auth_file_snapshot, '') || '::' || coalesce(auth_index, '')
+			when coalesce(auth_file_snapshot, '') <> '' then 'file::' || coalesce(auth_file_snapshot, '')
+			when coalesce(auth_index, '') <> '' then 'auth::' || coalesce(auth_index, '')
+			when coalesce(account_snapshot, '') <> '' then 'account::' || lower(coalesce(account_snapshot, ''))
+			when coalesce(source_hash, '') <> '' then 'source::' || coalesce(source_hash, '')
+			else 'event::' || event_hash
+		end as snapshot_key
+	from usage_events
+	where timestamp_ms >= ?
+	and (
+		coalesce(response_metadata_json, '') <> ''
+		or header_quota_recover_at_ms is not null
+		or header_quota_used_percent is not null
+		or coalesce(header_quota_plan_type, '') <> ''
+		or coalesce(header_error_kind, '') <> ''
+		or coalesce(header_error_code, '') <> ''
+		or coalesce(header_trace_id, '') <> ''
+	)
+	and (
+		coalesce(auth_file_snapshot, '') <> ''
+		or coalesce(auth_index, '') <> ''
+		or coalesce(account_snapshot, '') <> ''
+		or coalesce(source_hash, '') <> ''
+	)
+), ranked as (
+	select *, row_number() over (partition by snapshot_key order by timestamp_ms desc, id desc) as rn
+	from candidates
+)
+select
+	id,
+	event_hash,
+	timestamp_ms,
+	auth_file_snapshot,
+	auth_index,
+	account_snapshot,
+	auth_label_snapshot,
+	auth_provider_snapshot,
+	auth_project_id_snapshot,
+	source,
+	source_hash,
+	response_metadata_json,
+	header_quota_recover_at_ms,
+	header_quota_used_percent,
+	header_quota_plan_type,
+	header_error_kind,
+	header_error_code,
+	header_trace_id
+from ranked
+where rn = 1
+order by timestamp_ms desc, id desc
+limit ?`, sinceMS, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]HeaderSnapshot, 0, limit)
+	for rows.Next() {
+		var item HeaderSnapshot
+		var responseMetadataJSON string
+		if err := rows.Scan(
+			&item.ID,
+			&item.EventHash,
+			&item.TimestampMS,
+			&item.AuthFileSnapshot,
+			&item.AuthIndex,
+			&item.AccountSnapshot,
+			&item.AuthLabelSnapshot,
+			&item.AuthProviderSnapshot,
+			&item.AuthProjectIDSnapshot,
+			&item.Source,
+			&item.SourceHash,
+			&responseMetadataJSON,
+			&item.HeaderQuotaRecoverAtMS,
+			&item.HeaderQuotaUsedPercent,
+			&item.HeaderQuotaPlanType,
+			&item.HeaderErrorKind,
+			&item.HeaderErrorCode,
+			&item.HeaderTraceID,
+		); err != nil {
+			return nil, err
+		}
+		item.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *repository) ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) (int64, error) {
+	if location == nil {
+		location = time.UTC
+	}
 	where, args := analyticsWhere(filter)
-	var count int64
-	if err := r.db.QueryRowContext(ctx, `select count(distinct (timestamp_ms / 86400000)) from usage_events `+where, args...).Scan(&count); err != nil {
+	rows, err := r.db.QueryContext(ctx, `select timestamp_ms from usage_events `+where, args...)
+	if err != nil {
 		return 0, err
 	}
-	return count, nil
+	defer rows.Close()
+
+	activeDays := map[string]struct{}{}
+	for rows.Next() {
+		var timestampMS int64
+		if err := rows.Scan(&timestampMS); err != nil {
+			return 0, err
+		}
+		activeDays[time.UnixMilli(timestampMS).In(location).Format("2006-01-02")] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return int64(len(activeDays)), nil
 }
 
 func (r *repository) ZeroTokenModelsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]string, error) {
@@ -947,17 +1889,41 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	addInCondition("model", filter.Models)
 	addProviderCondition(filter.Providers, &conditions, &args)
 	addAccountCondition(filter.Accounts, &conditions, &args)
+	addInCondition("auth_file_snapshot", filter.AuthFiles)
 	addInCondition("auth_index", filter.AuthIndices)
 	addInCondition("api_key_hash", filter.APIKeyHashes)
 	addInCondition("source_hash", filter.SourceHashes)
+	addInCondition("auth_project_id_snapshot", filter.ProjectIDs)
+	addInCondition("executor_type", filter.RequestTypes)
+	addInCondition("header_error_kind", filter.HeaderErrorKinds)
+	addInCondition("header_error_code", filter.HeaderErrorCodes)
+	addInCondition("header_quota_plan_type", filter.HeaderQuotaPlans)
+	addInCondition("header_trace_id", filter.HeaderTraceIDs)
 	if !filter.IncludeFailed {
 		conditions = append(conditions, "failed = 0")
 	}
 	if filter.FailedOnly {
 		conditions = append(conditions, "failed = 1")
 	}
-	if filter.ExcludeZeroTokens {
-		conditions = append(conditions, "total_tokens > 0")
+	if filter.MinLatencyMS > 0 {
+		conditions = append(conditions, "latency_ms >= ?")
+		args = append(args, filter.MinLatencyMS)
+	}
+	cacheHitCondition := strings.Join([]string{
+		"(coalesce(cached_tokens, 0) > 0",
+		"or coalesce(cache_tokens, 0) > 0",
+		"or coalesce(cache_read_tokens, 0) > 0",
+		"or coalesce(cache_creation_tokens, 0) > 0)",
+	}, " ")
+	switch strings.TrimSpace(strings.ToLower(filter.CacheStatus)) {
+	case "hit":
+		conditions = append(conditions, cacheHitCondition)
+	case "miss":
+		conditions = append(conditions, "not "+cacheHitCondition)
+	case "read":
+		conditions = append(conditions, "coalesce(cache_read_tokens, 0) > 0")
+	case "creation":
+		conditions = append(conditions, "coalesce(cache_creation_tokens, 0) > 0")
 	}
 
 	return "where " + strings.Join(conditions, " and "), args

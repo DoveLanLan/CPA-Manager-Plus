@@ -19,8 +19,16 @@ const { mocks } = vi.hoisted(() => {
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
       navigate: vi.fn(),
+      panelFeatureAvailability: {
+        checking: false,
+        managerServiceBase: 'http://manager.local:18317',
+        serverCodexInspectionAvailable: true,
+      },
       loadExcluded: vi.fn(async () => undefined),
       loadModelAlias: vi.fn(async () => undefined),
+      listCodexInspectionRuns: vi.fn(),
+      getCodexInspectionRun: vi.fn(),
+      getHeaderSnapshots: vi.fn(),
       deleteExcluded: vi.fn(async () => undefined),
       deleteModelAlias: vi.fn(async () => undefined),
       handleMappingUpdate: vi.fn(async () => undefined),
@@ -34,8 +42,11 @@ const { mocks } = vi.hoisted(() => {
       closePrefixProxyEditor: vi.fn(),
       handlePrefixProxyChange: vi.fn(),
       handlePrefixProxySave: vi.fn(async () => undefined),
+      codexQuota: {} as Record<string, unknown>,
       lastCodexInspectionLastRun: null as {
         result: {
+          startedAt?: number;
+          finishedAt?: number;
           results: Array<{
             fileName: string;
             authIndex?: string | number | null;
@@ -79,6 +90,10 @@ vi.mock('@/hooks/useHeaderRefresh', () => ({
   useHeaderRefresh: () => {},
 }));
 
+vi.mock('@/hooks/usePanelFeatureAvailability', () => ({
+  usePanelFeatureAvailability: () => mocks.panelFeatureAvailability,
+}));
+
 vi.mock('@/components/common/PageTransitionLayer', () => ({
   usePageTransitionLayer: () => ({ status: 'current' }),
 }));
@@ -93,6 +108,16 @@ vi.mock('@/services/api', () => ({
     saveJsonObject: mocks.saveJsonObject,
     deleteFiles: mocks.deleteFiles,
     deleteAll: mocks.deleteAll,
+  },
+}));
+
+vi.mock('@/services/api/usageService', () => ({
+  usageServiceApi: {
+    listCodexInspectionRuns: mocks.listCodexInspectionRuns,
+    getCodexInspectionRun: mocks.getCodexInspectionRun,
+  },
+  monitoringAnalyticsApi: {
+    getHeaderSnapshots: mocks.getHeaderSnapshots,
   },
 }));
 
@@ -123,8 +148,8 @@ vi.mock('@/stores', () => ({
     }),
   useThemeStore: (selector: (state: { resolvedTheme: 'dark' }) => unknown) =>
     selector({ resolvedTheme: 'dark' }),
-  useQuotaStore: (selector: (state: { codexQuota: Record<string, never> }) => unknown) =>
-    selector({ codexQuota: {} }),
+  useQuotaStore: (selector: (state: { codexQuota: Record<string, unknown> }) => unknown) =>
+    selector({ codexQuota: mocks.codexQuota }),
 }));
 
 vi.mock('@/features/authFiles/hooks/useAuthFilesOauth', () => ({
@@ -258,7 +283,16 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
     mocks.showConfirmation.mockReset();
     mocks.loadExcluded.mockReset();
     mocks.loadModelAlias.mockReset();
+    mocks.listCodexInspectionRuns.mockReset();
+    mocks.getCodexInspectionRun.mockReset();
+    mocks.getHeaderSnapshots.mockReset();
     mocks.connectionStatus = 'connected';
+    mocks.codexQuota = {};
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      serverCodexInspectionAvailable: true,
+    };
     mocks.lastCodexInspectionLastRun = null;
 
     mocks.list.mockResolvedValue({ files: [] });
@@ -267,6 +301,14 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
     mocks.deleteAll.mockResolvedValue(undefined);
     mocks.loadExcluded.mockResolvedValue(undefined);
     mocks.loadModelAlias.mockResolvedValue(undefined);
+    mocks.listCodexInspectionRuns.mockResolvedValue({ items: [] });
+    mocks.getCodexInspectionRun.mockResolvedValue({ run: { id: 1 }, results: [], logs: [] });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_700_000_000_000,
+      from_ms: 1_700_000_000_000,
+      to_ms: 1_700_000_000_000,
+      items: [],
+    });
   });
 
   it('keeps Codex inspection status scoped to auth index for rows from the same file', async () => {
@@ -339,6 +381,296 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
       expect(renderedCards.map((node) => node.props['data-auth-card'])).toEqual([
         'shared-codex.json::0',
       ]);
+    });
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('prefers server Codex inspection status over the local inspection cache', async () => {
+    mocks.list.mockResolvedValue({
+      files: [{ name: 'server-codex.json', type: 'codex', authIndex: 0 }],
+    });
+    mocks.lastCodexInspectionLastRun = {
+      result: {
+        results: [
+          {
+            fileName: 'server-codex.json',
+            authIndex: 0,
+            statusCode: 401,
+            action: 'reauth',
+            usedPercent: null,
+            isQuota: false,
+          },
+        ],
+      },
+    };
+    mocks.listCodexInspectionRuns.mockResolvedValue({ items: [{ id: 9 }] });
+    mocks.getCodexInspectionRun.mockResolvedValue({
+      run: { id: 9 },
+      results: [
+        {
+          fileName: 'server-codex.json',
+          authIndex: '0',
+          statusCode: 200,
+          action: 'keep',
+          usedPercent: null,
+          isQuota: false,
+        },
+      ],
+      logs: [],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getCodexInspectionRun).toHaveBeenCalledWith(
+        'http://manager.local:18317',
+        'test-key',
+        9
+      );
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'server-codex.json::0' }).props[
+          'data-codex-badges'
+        ]
+      ).not.toContain('reauth');
+    });
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('uses local Codex inspection cache without probing server runs when server inspection is unavailable', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: '',
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.list.mockResolvedValue({
+      files: [{ name: 'local-codex.json', type: 'codex', authIndex: 0 }],
+    });
+    mocks.lastCodexInspectionLastRun = {
+      result: {
+        results: [
+          {
+            fileName: 'local-codex.json',
+            authIndex: 0,
+            statusCode: 401,
+            action: 'reauth',
+            usedPercent: null,
+            isQuota: false,
+          },
+        ],
+      },
+    };
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'local-codex.json::0' }).props[
+          'data-codex-badges'
+        ]
+      ).toContain('reauth');
+    });
+
+    expect(mocks.listCodexInspectionRuns).not.toHaveBeenCalled();
+    expect(mocks.getCodexInspectionRun).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('suppresses stale server Codex inspection status after a newer same-row quota refresh', async () => {
+    mocks.list.mockResolvedValue({
+      files: [{ name: 'server-stale-codex.json', type: 'codex', authIndex: 0 }],
+    });
+    mocks.codexQuota = {
+      'server-stale-codex.json::0': {
+        status: 'success',
+        windows: [],
+        authFileKey: 'server-stale-codex.json::0',
+        fetchedAtMs: 2_000,
+      },
+    };
+    mocks.listCodexInspectionRuns.mockResolvedValue({ items: [{ id: 10 }] });
+    mocks.getCodexInspectionRun.mockResolvedValue({
+      run: { id: 10, startedAtMs: 900, finishedAtMs: 1_000, updatedAtMs: 1_000 },
+      results: [
+        {
+          fileName: 'server-stale-codex.json',
+          authIndex: '0',
+          statusCode: 401,
+          action: 'reauth',
+          usedPercent: null,
+          isQuota: false,
+        },
+      ],
+      logs: [],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'server-stale-codex.json::0' }).props[
+          'data-codex-badges'
+        ]
+      ).not.toContain('reauth');
+    });
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('suppresses stale usage-header quota status after a newer healthy Codex inspection', async () => {
+    mocks.list.mockResolvedValue({
+      files: [{ name: 'header-stale-codex.json', type: 'codex', authIndex: 0 }],
+    });
+    mocks.listCodexInspectionRuns.mockResolvedValue({ items: [{ id: 11 }] });
+    mocks.getCodexInspectionRun.mockResolvedValue({
+      run: { id: 11, startedAtMs: 1_900, finishedAtMs: 2_000, updatedAtMs: 2_000 },
+      results: [
+        {
+          fileName: 'header-stale-codex.json',
+          authIndex: '0',
+          statusCode: 200,
+          action: 'keep',
+          usedPercent: null,
+          isQuota: false,
+        },
+      ],
+      logs: [],
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_000,
+      from_ms: 1_000,
+      to_ms: 1_000,
+      items: [
+        {
+          event_hash: 'old-weekly-limit',
+          timestamp_ms: 1_000,
+          auth_file_snapshot: 'header-stale-codex.json',
+          auth_index: '0',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              rate_limit_reached_type: 'secondary',
+              reached_window_kind: 'weekly',
+              secondary: {
+                used_percent: 100,
+                window_minutes: 10_080,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getCodexInspectionRun).toHaveBeenCalled();
+      expect(mocks.getHeaderSnapshots).toHaveBeenCalled();
+    });
+
+    const badges = renderer!.root.findByProps({
+      'data-auth-card': 'header-stale-codex.json::0',
+    }).props['data-codex-badges'];
+    expect(badges).not.toContain('weekly_limited');
+    expect(badges).not.toContain('observed_quota');
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('does not suppress another auth index row when same-file quota identity differs', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: '',
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.list.mockResolvedValue({
+      files: [
+        { name: 'shared-stale-codex.json', type: 'codex', authIndex: 0 },
+        { name: 'shared-stale-codex.json', type: 'codex', authIndex: 1 },
+      ],
+    });
+    mocks.codexQuota = {
+      'shared-stale-codex.json::0': {
+        status: 'success',
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly limit',
+            usedPercent: 100,
+            resetLabel: '06/04 12:00',
+            limitWindowSeconds: 604_800,
+          },
+        ],
+        authFileKey: 'shared-stale-codex.json::0',
+        fetchedAtMs: 2_000,
+      },
+    };
+    mocks.lastCodexInspectionLastRun = {
+      result: {
+        startedAt: 900,
+        finishedAt: 1_000,
+        results: [
+          {
+            fileName: 'shared-stale-codex.json',
+            authIndex: 0,
+            statusCode: 401,
+            action: 'reauth',
+            usedPercent: null,
+            isQuota: false,
+          },
+          {
+            fileName: 'shared-stale-codex.json',
+            authIndex: 1,
+            statusCode: 401,
+            action: 'reauth',
+            usedPercent: null,
+            isQuota: false,
+          },
+        ],
+      },
+    };
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      const firstBadges = renderer!.root.findByProps({
+        'data-auth-card': 'shared-stale-codex.json::0',
+      }).props['data-codex-badges'];
+      const secondBadges = renderer!.root.findByProps({
+        'data-auth-card': 'shared-stale-codex.json::1',
+      }).props['data-codex-badges'];
+
+      expect(firstBadges).not.toContain('reauth');
+      expect(firstBadges).toContain('weekly_limited');
+      expect(secondBadges).toContain('reauth');
+      expect(secondBadges).not.toContain('weekly_limited');
     });
 
     await act(async () => {
@@ -484,7 +816,7 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
 
     await vi.waitFor(() => {
       expect(mocks.saveJsonObject).toHaveBeenCalledWith(
-        'session-user-tag-example-com.codex.json',
+        'codex-session-session.user+tag@example.com.json',
         expect.objectContaining({
           type: 'codex',
           email: 'Session.User+tag@example.com',
@@ -495,7 +827,7 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
     });
     await vi.waitFor(() => {
       expect(mocks.showNotification).toHaveBeenCalledWith(
-        'auth_files.paste_success:session-user-tag-example-com.codex.json',
+        'auth_files.paste_success:codex-session-session.user+tag@example.com.json',
         'success'
       );
       expect(renderer!.root.findAllByProps({ id: 'auth-json-paste-content' })).toHaveLength(0);

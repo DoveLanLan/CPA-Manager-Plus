@@ -8,6 +8,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/pricing"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
 const (
@@ -164,20 +165,27 @@ type FailureSource struct {
 }
 
 type RecentFailure struct {
-	TimestampMS           int64  `json:"timestamp_ms"`
-	Model                 string `json:"model"`
-	APIKeyHash            string `json:"api_key_hash"`
-	Source                string `json:"source,omitempty"`
-	SourceHash            string `json:"source_hash"`
-	AuthIndex             string `json:"auth_index"`
-	AccountSnapshot       string `json:"account_snapshot,omitempty"`
-	AuthLabelSnapshot     string `json:"auth_label_snapshot,omitempty"`
-	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
-	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
-	Endpoint              string `json:"endpoint"`
-	DurationMS            *int64 `json:"duration_ms"`
-	FailStatusCode        *int64 `json:"fail_status_code,omitempty"`
-	FailSummary           string `json:"fail_summary,omitempty"`
+	TimestampMS            int64                         `json:"timestamp_ms"`
+	Model                  string                        `json:"model"`
+	APIKeyHash             string                        `json:"api_key_hash"`
+	Source                 string                        `json:"source,omitempty"`
+	SourceHash             string                        `json:"source_hash"`
+	AuthIndex              string                        `json:"auth_index"`
+	AccountSnapshot        string                        `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot      string                        `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot   string                        `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot  string                        `json:"auth_project_id_snapshot,omitempty"`
+	Endpoint               string                        `json:"endpoint"`
+	DurationMS             *int64                        `json:"duration_ms"`
+	FailStatusCode         *int64                        `json:"fail_status_code,omitempty"`
+	FailSummary            string                        `json:"fail_summary,omitempty"`
+	ResponseMetadata       *usage.ResponseHeaderMetadata `json:"response_metadata,omitempty"`
+	HeaderQuotaRecoverAtMS *int64                        `json:"header_quota_recover_at_ms,omitempty"`
+	HeaderQuotaUsedPercent *float64                      `json:"header_quota_used_percent,omitempty"`
+	HeaderQuotaPlanType    string                        `json:"header_quota_plan_type,omitempty"`
+	HeaderErrorKind        string                        `json:"header_error_kind,omitempty"`
+	HeaderErrorCode        string                        `json:"header_error_code,omitempty"`
+	HeaderTraceID          string                        `json:"header_trace_id,omitempty"`
 }
 
 type SummaryResponse struct {
@@ -447,15 +455,32 @@ func requestHealthTone(calls int64, failureRate float64, future bool) string {
 }
 
 func buildTokenMix(today TodaySummary) []TokenMixSegment {
-	total := today.InputTokens + today.OutputTokens + today.ReasoningTokens +
-		today.CachedTokens + today.CacheReadTokens + today.CacheCreationTokens
+	inputTokens := max(today.InputTokens, int64(0))
+	cachedTokens := max(today.CachedTokens, int64(0)) +
+		max(today.CacheReadTokens, int64(0)) +
+		max(today.CacheCreationTokens, int64(0))
+	outputTokens := max(today.OutputTokens, int64(0))
+	reasoningTokens := max(today.ReasoningTokens, int64(0))
+
+	if today.TotalTokens > 0 {
+		overflow := inputTokens + cachedTokens + outputTokens + reasoningTokens - today.TotalTokens
+		if overflow > 0 {
+			inputDeduction := min(inputTokens, overflow)
+			inputTokens -= inputDeduction
+			overflow -= inputDeduction
+		}
+		if overflow > 0 {
+			outputDeduction := min(outputTokens, overflow)
+			outputTokens -= outputDeduction
+		}
+	}
+
+	total := inputTokens + cachedTokens + outputTokens + reasoningTokens
 	return []TokenMixSegment{
-		{Key: "input", Tokens: today.InputTokens, Share: rate(today.InputTokens, total)},
-		{Key: "output", Tokens: today.OutputTokens, Share: rate(today.OutputTokens, total)},
-		{Key: "reasoning", Tokens: today.ReasoningTokens, Share: rate(today.ReasoningTokens, total)},
-		{Key: "cached", Tokens: today.CachedTokens, Share: rate(today.CachedTokens, total)},
-		{Key: "cache_read", Tokens: today.CacheReadTokens, Share: rate(today.CacheReadTokens, total)},
-		{Key: "cache_creation", Tokens: today.CacheCreationTokens, Share: rate(today.CacheCreationTokens, total)},
+		{Key: "input", Tokens: inputTokens, Share: rate(inputTokens, total)},
+		{Key: "cached", Tokens: cachedTokens, Share: rate(cachedTokens, total)},
+		{Key: "output", Tokens: outputTokens, Share: rate(outputTokens, total)},
+		{Key: "reasoning", Tokens: reasoningTokens, Share: rate(reasoningTokens, total)},
 	}
 }
 
@@ -601,20 +626,27 @@ func buildRecentFailures(failures []store.RecentFailure) []RecentFailure {
 	result := make([]RecentFailure, 0, len(failures))
 	for _, failure := range failures {
 		result = append(result, RecentFailure{
-			TimestampMS:           failure.TimestampMS,
-			Model:                 failure.Model,
-			APIKeyHash:            failure.APIKeyHash,
-			Source:                failure.Source,
-			SourceHash:            failure.SourceHash,
-			AuthIndex:             failure.AuthIndex,
-			AccountSnapshot:       failure.AccountSnapshot,
-			AuthLabelSnapshot:     failure.AuthLabelSnapshot,
-			AuthProviderSnapshot:  failure.AuthProviderSnapshot,
-			AuthProjectIDSnapshot: failure.AuthProjectIDSnapshot,
-			Endpoint:              failure.Endpoint,
-			DurationMS:            nullableInt(failure.LatencyMS.Valid, failure.LatencyMS.Int64),
-			FailStatusCode:        nullableInt(failure.FailStatusCode.Valid, failure.FailStatusCode.Int64),
-			FailSummary:           failure.FailSummary,
+			TimestampMS:            failure.TimestampMS,
+			Model:                  failure.Model,
+			APIKeyHash:             failure.APIKeyHash,
+			Source:                 failure.Source,
+			SourceHash:             failure.SourceHash,
+			AuthIndex:              failure.AuthIndex,
+			AccountSnapshot:        failure.AccountSnapshot,
+			AuthLabelSnapshot:      failure.AuthLabelSnapshot,
+			AuthProviderSnapshot:   failure.AuthProviderSnapshot,
+			AuthProjectIDSnapshot:  failure.AuthProjectIDSnapshot,
+			Endpoint:               failure.Endpoint,
+			DurationMS:             nullableInt(failure.LatencyMS.Valid, failure.LatencyMS.Int64),
+			FailStatusCode:         nullableInt(failure.FailStatusCode.Valid, failure.FailStatusCode.Int64),
+			FailSummary:            failure.FailSummary,
+			ResponseMetadata:       failure.ResponseMetadata,
+			HeaderQuotaRecoverAtMS: nullableInt(failure.HeaderQuotaRecoverAtMS.Valid, failure.HeaderQuotaRecoverAtMS.Int64),
+			HeaderQuotaUsedPercent: nullableFloat(failure.HeaderQuotaUsedPercent.Valid, failure.HeaderQuotaUsedPercent.Float64),
+			HeaderQuotaPlanType:    failure.HeaderQuotaPlanType,
+			HeaderErrorKind:        failure.HeaderErrorKind,
+			HeaderErrorCode:        failure.HeaderErrorCode,
+			HeaderTraceID:          failure.HeaderTraceID,
 		})
 	}
 	return result

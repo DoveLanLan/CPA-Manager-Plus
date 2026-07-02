@@ -1,10 +1,9 @@
 import type { TFunction } from 'i18next';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  fetchAntigravityQuota,
   fetchClaudeQuota,
   fetchCodexQuota,
-  fetchGeminiCliCodeAssist,
-  fetchGeminiCliQuotaBuckets,
   fetchXaiQuota,
 } from '@/utils/quota';
 import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/accountOverviewQuotaTargets';
@@ -16,10 +15,15 @@ import {
   buildAccountOptions,
   buildApiKeyOptionsFromRows,
   buildChannelOptionsFromValues,
+  buildAccountQuotaRefreshFailureEntry,
+  buildMonitoringInitialStateFromQuery,
   buildModelOptionsFromValues,
   buildProviderOptionsFromValues,
+  mergeObservedAccountQuotaEntry,
+  mergeObservedAccountQuotaState,
   requestAccountQuota,
 } from './monitoringCenterPageModel';
+import { getDefaultMonitoringCenterUiState } from '@/features/monitoring/monitoringCenterUiState';
 
 vi.mock('@/utils/quota', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/quota')>();
@@ -28,8 +32,6 @@ vi.mock('@/utils/quota', async (importOriginal) => {
     fetchAntigravityQuota: vi.fn(),
     fetchClaudeQuota: vi.fn(),
     fetchCodexQuota: vi.fn(),
-    fetchGeminiCliCodeAssist: vi.fn(),
-    fetchGeminiCliQuotaBuckets: vi.fn(),
     fetchKimiQuota: vi.fn(),
     fetchXaiQuota: vi.fn(),
   };
@@ -50,19 +52,13 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'codex_quota.plan_free': 'Free',
     'codex_quota.monthly_window': 'Monthly limit',
     'codex_quota.window_usage_duration': '{{used}} / {{total}} used',
-    'gemini_cli_quota.title': 'Gemini CLI Quota',
-    'gemini_cli_quota.tier_label': 'Tier',
-    'gemini_cli_quota.credit_label': 'Google One AI Credits',
-    'gemini_cli_quota.credit_amount': '{{count}} credits',
-    'gemini_cli_quota.empty_buckets': 'No Gemini quota data',
-    'gemini_cli_quota.remaining_amount': 'Remaining {{count}}',
     'kimi_quota.title': 'Kimi Quota',
     'kimi_quota.empty_data': 'No Kimi quota data',
     'xai_quota.title': 'xAI Quota',
     'xai_quota.empty_data': 'No xAI quota data',
     'xai_quota.monthly_limit': 'Monthly billing limit',
     'xai_quota.on_demand_cap': 'On-demand cap',
-    'xai_quota.usage_amount': '{{used}} / {{limit}}',
+    'xai_quota.usage_amount': '{{remaining}} / {{limit}} remaining',
   };
   let value = copy[key] ?? key;
   Object.entries(options ?? {}).forEach(([name, replacement]) => {
@@ -143,6 +139,29 @@ const createApiKeyRow = (apiKeyHash: string, label: string): MonitoringApiKeyRow
 });
 
 describe('monitoringCenterPageModel filter options', () => {
+  it('maps usage analytics drilldown query into initial realtime filters', () => {
+    const initialState = {
+      ...getDefaultMonitoringCenterUiState(),
+      searchInput: 'retained search',
+    };
+    const state = buildMonitoringInitialStateFromQuery(
+      '?from_ms=1780000000000&to_ms=1780003600000&model=gpt-4o&api_key_hash=abcdef1234&status=failed&provider=OpenAI&auth_file=codex-auth.json&project_id=project-1&request_type=codex&search=req-42&min_latency_ms=10000&cache_status=hit',
+      initialState
+    );
+
+    expect(state).toMatchObject({
+      activeDataTab: 'realtime',
+      timeRange: 'custom',
+      selectedModel: 'gpt-4o',
+      selectedApiKeyHash: 'abcdef1234',
+      selectedStatus: 'failed',
+      selectedProvider: 'OpenAI',
+      searchInput: 'req-42',
+    });
+    expect(state.customStartInput).toBeTruthy();
+    expect(state.customEndInput).toBeTruthy();
+  });
+
   it('keeps alternate candidates when a dynamic filter already has a selected value', () => {
     expect(
       buildProviderOptionsFromValues(['codex', 'gemini'], 'codex', t).map((item) => item.value)
@@ -186,10 +205,9 @@ describe('monitoringCenterPageModel filter options', () => {
 
 describe('monitoringCenterPageModel account quota', () => {
   beforeEach(() => {
+    vi.mocked(fetchAntigravityQuota).mockReset();
     vi.mocked(fetchClaudeQuota).mockReset();
     vi.mocked(fetchCodexQuota).mockReset();
-    vi.mocked(fetchGeminiCliCodeAssist).mockReset();
-    vi.mocked(fetchGeminiCliQuotaBuckets).mockReset();
     vi.mocked(fetchXaiQuota).mockReset();
   });
 
@@ -233,6 +251,10 @@ describe('monitoringCenterPageModel account quota', () => {
   it('maps Codex monthly quota windows into account quota entries', async () => {
     vi.mocked(fetchCodexQuota).mockResolvedValue({
       planType: 'free',
+      subscriptionActiveUntil: null,
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: null,
       windows: [
         {
           id: 'monthly',
@@ -271,51 +293,555 @@ describe('monitoringCenterPageModel account quota', () => {
     });
   });
 
-  it('maps Gemini CLI buckets and supplementary tier metadata', async () => {
-    vi.mocked(fetchGeminiCliQuotaBuckets).mockResolvedValue({
-      authIndex: '2',
-      projectId: 'project-1',
-      buckets: [
+  it('merges observed Codex account quota without dropping existing API-only windows', () => {
+    const activeEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'free',
+      metaLabels: ['Codex Quota', 'Plan: Free'],
+      windows: [
         {
-          id: 'gemini-pro-series',
-          label: 'Gemini Pro Series',
-          remainingFraction: 0.25,
-          remainingAmount: 12,
-          resetTime: undefined,
-          tokenType: 'tokens',
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 95,
+          resetLabel: '06/30 12:00',
+          usageLabel: '1.5d / 30d used',
+        },
+        {
+          id: 'spark-five-hour-0',
+          label: 'spark 5-hour limit',
+          remainingPercent: 70,
+          resetLabel: '07/01 01:00',
+          usageLabel: '1.5h / 5h used',
+        },
+      ],
+    };
+    const observedEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'plus',
+      metaLabels: ['Codex Quota', 'Plan: Plus', 'Observed from latest usage response headers'],
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+          usageLabel: '13.5d / 30d used',
+        },
+      ],
+    };
+
+    const merged = mergeObservedAccountQuotaEntry(activeEntry, observedEntry);
+
+    expect(merged).toMatchObject({
+      planType: 'plus',
+      metaLabels: [
+        'Codex Quota',
+        'Plan: Plus',
+        'Observed from latest usage response headers',
+      ],
+      windows: [
+        {
+          id: 'monthly',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+          usageLabel: '13.5d / 30d used',
+        },
+        {
+          id: 'spark-five-hour-0',
+          remainingPercent: 70,
+          resetLabel: '07/01 01:00',
+          usageLabel: '1.5h / 5h used',
         },
       ],
     });
-    vi.mocked(fetchGeminiCliCodeAssist).mockResolvedValue({
-      tierLabel: 'Ultra',
-      tierId: 'g1-ultra-tier',
-      creditBalance: 7,
+  });
+
+  it('marks manual quota refresh failures instead of treating cached entries as success', () => {
+    const target = createTarget({
+      provider: 'codex',
+      key: 'codex::2::codex.json',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const activeEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'free',
+      metaLabels: ['Codex Quota', 'Plan: Free'],
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 95,
+          resetLabel: '06/30 12:00',
+          usageLabel: '1.5d / 30d used',
+        },
+      ],
+    };
+
+    const failedEntry = buildAccountQuotaRefreshFailureEntry(
+      target,
+      '502 bad gateway',
+      t,
+      activeEntry,
+      null
+    );
+
+    expect(failedEntry).toMatchObject({
+      key: 'codex::2::codex.json',
+      error: '502 bad gateway',
+      windows: [
+        {
+          id: 'monthly',
+          remainingPercent: 95,
+        },
+      ],
+    });
+  });
+
+  it('keeps header-updated fields on manual quota refresh failures', () => {
+    const target = createTarget({
+      provider: 'codex',
+      key: 'codex::2::codex.json',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const activeEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'free',
+      metaLabels: ['Codex Quota', 'Plan: Free'],
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 95,
+          resetLabel: '06/30 12:00',
+          usageLabel: '1.5d / 30d used',
+        },
+        {
+          id: 'spark-five-hour-0',
+          label: 'spark 5-hour limit',
+          remainingPercent: 70,
+          resetLabel: '07/01 01:00',
+          usageLabel: '1.5h / 5h used',
+        },
+      ],
+    };
+    const observedEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'plus',
+      metaLabels: ['Codex Quota', 'Plan: Plus', 'Observed from latest usage response headers'],
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+          usageLabel: '13.5d / 30d used',
+        },
+      ],
+    };
+
+    const failedEntry = buildAccountQuotaRefreshFailureEntry(
+      target,
+      '502 bad gateway',
+      t,
+      activeEntry,
+      observedEntry
+    );
+
+    expect(failedEntry).toMatchObject({
+      planType: 'plus',
+      error: '502 bad gateway',
+      windows: [
+        {
+          id: 'monthly',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+        },
+        {
+          id: 'spark-five-hour-0',
+          remainingPercent: 70,
+          resetLabel: '07/01 01:00',
+        },
+      ],
+    });
+  });
+
+  it('keeps API-only windows across repeated manual quota refresh failures', () => {
+    const target = createTarget({
+      provider: 'codex',
+      key: 'codex::2::codex.json',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const activeEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'free',
+      metaLabels: ['Codex Quota', 'Plan: Free'],
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 95,
+          resetLabel: '06/30 12:00',
+          usageLabel: '1.5d / 30d used',
+        },
+        {
+          id: 'spark-five-hour-0',
+          label: 'spark 5-hour limit',
+          remainingPercent: 70,
+          resetLabel: '07/01 01:00',
+          usageLabel: '1.5h / 5h used',
+        },
+      ],
+    };
+    const firstFailedEntry = buildAccountQuotaRefreshFailureEntry(
+      target,
+      '502 bad gateway',
+      t,
+      activeEntry,
+      null
+    );
+    const observedEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'plus',
+      metaLabels: ['Codex Quota', 'Plan: Plus', 'Observed from latest usage response headers'],
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+          usageLabel: '13.5d / 30d used',
+        },
+      ],
+    };
+
+    const secondFailedEntry = buildAccountQuotaRefreshFailureEntry(
+      target,
+      '504 timeout',
+      t,
+      firstFailedEntry,
+      observedEntry
+    );
+
+    expect(secondFailedEntry.error).toBe('504 timeout');
+    expect(secondFailedEntry.windows.map((window) => window.id)).toEqual([
+      'monthly',
+      'spark-five-hour-0',
+    ]);
+    expect(secondFailedEntry).toMatchObject({
+      planType: 'plus',
+      windows: [
+        {
+          id: 'monthly',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+        },
+        {
+          id: 'spark-five-hour-0',
+          remainingPercent: 70,
+          resetLabel: '07/01 01:00',
+        },
+      ],
+    });
+  });
+
+  it('merges older header entries into failed account quota state without clearing the failure', () => {
+    const target = createTarget({
+      provider: 'codex',
+      key: 'codex::2::codex.json',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const state = {
+      status: 'error' as const,
+      targetKey: 'codex::2::codex.json',
+      error: '502 bad gateway',
+      failedAtMs: 2_000,
+      entries: [
+        {
+          key: 'codex::2::codex.json',
+          provider: 'codex' as const,
+          providerLabel: 'Codex Quota',
+          authLabel: 'Auth',
+          fileName: 'codex.json',
+          planType: 'free',
+          metaLabels: ['Codex Quota', 'Plan: Free'],
+          error: '502 bad gateway',
+          failedAtMs: 2_000,
+          windows: [
+            {
+              id: 'monthly',
+              label: 'Monthly limit',
+              remainingPercent: 95,
+              resetLabel: '06/30 12:00',
+              usageLabel: '1.5d / 30d used',
+            },
+            {
+              id: 'spark-five-hour-0',
+              label: 'spark 5-hour limit',
+              remainingPercent: 70,
+              resetLabel: '07/01 01:00',
+              usageLabel: '1.5h / 5h used',
+            },
+          ],
+        },
+      ],
+    };
+    const observedEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'plus',
+      metaLabels: ['Codex Quota', 'Plan: Plus', 'Observed from latest usage response headers'],
+      observedAtMs: 1_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+          usageLabel: '13.5d / 30d used',
+        },
+      ],
+    };
+
+    const merged = mergeObservedAccountQuotaState(state, [target], [observedEntry]);
+
+    expect(merged).not.toBe(state);
+    expect(merged).toMatchObject({
+      status: 'error',
+      error: '502 bad gateway',
+      failedAtMs: 2_000,
+      entries: [
+        {
+          planType: 'plus',
+          error: '502 bad gateway',
+          failedAtMs: 2_000,
+          windows: [
+            {
+              id: 'monthly',
+              remainingPercent: 55,
+              resetLabel: '07/01 02:00',
+            },
+            {
+              id: 'spark-five-hour-0',
+              remainingPercent: 70,
+              resetLabel: '07/01 01:00',
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('recovers failed account quota state with newer header entries', () => {
+    const target = createTarget({
+      provider: 'codex',
+      key: 'codex::2::codex.json',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const state = {
+      status: 'error' as const,
+      targetKey: 'codex::2::codex.json',
+      error: '502 bad gateway',
+      failedAtMs: 1_000,
+      entries: [
+        {
+          key: 'codex::2::codex.json',
+          provider: 'codex' as const,
+          providerLabel: 'Codex Quota',
+          authLabel: 'Auth',
+          fileName: 'codex.json',
+          planType: 'free',
+          metaLabels: ['Codex Quota', 'Plan: Free'],
+          error: '502 bad gateway',
+          failedAtMs: 1_000,
+          windows: [
+            {
+              id: 'monthly',
+              label: 'Monthly limit',
+              remainingPercent: 95,
+              resetLabel: '06/30 12:00',
+              usageLabel: '1.5d / 30d used',
+            },
+            {
+              id: 'spark-five-hour-0',
+              label: 'spark 5-hour limit',
+              remainingPercent: 70,
+              resetLabel: '07/01 01:00',
+              usageLabel: '1.5h / 5h used',
+            },
+          ],
+        },
+      ],
+    };
+    const observedEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'plus',
+      metaLabels: ['Codex Quota', 'Plan: Plus', 'Observed from latest usage response headers'],
+      observedAtMs: 2_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+          usageLabel: '13.5d / 30d used',
+        },
+      ],
+    };
+
+    const merged = mergeObservedAccountQuotaState(state, [target], [observedEntry]);
+
+    expect(merged).not.toBe(state);
+    expect(merged).toMatchObject({
+      status: 'success',
+      error: '',
+      failedAtMs: undefined,
+      entries: [
+        {
+          planType: 'plus',
+          observedAtMs: 2_000,
+          observedFromUsageHeaders: true,
+          windows: [
+            {
+              id: 'monthly',
+              remainingPercent: 55,
+              resetLabel: '07/01 02:00',
+            },
+            {
+              id: 'spark-five-hour-0',
+              remainingPercent: 70,
+              resetLabel: '07/01 01:00',
+            },
+          ],
+        },
+      ],
+    });
+    expect(merged?.entries[0].error).toBeUndefined();
+    expect(merged?.entries[0].failedAtMs).toBeUndefined();
+  });
+
+  it('does not merge later header entries when the account quota target set changed', () => {
+    const target = createTarget({
+      provider: 'codex',
+      key: 'codex::2::codex.json',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const state = {
+      status: 'error' as const,
+      targetKey: 'codex::1::old.json',
+      error: '502 bad gateway',
+      entries: [],
+    };
+    const observedEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'plus',
+      metaLabels: ['Codex Quota', 'Plan: Plus'],
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+          usageLabel: '13.5d / 30d used',
+        },
+      ],
+    };
+
+    expect(mergeObservedAccountQuotaState(state, [target], [observedEntry])).toBe(state);
+  });
+
+  it('maps Antigravity grouped buckets into account quota entries', async () => {
+    vi.mocked(fetchAntigravityQuota).mockResolvedValue({
+      serverTimeOffsetMs: null,
+      groups: [
+        {
+          id: 'agent',
+          label: 'Agent',
+          buckets: [
+            {
+              id: 'daily',
+              label: 'Daily',
+              window: '24h',
+              remainingFraction: 0.25,
+              resetTime: undefined,
+            },
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              window: '7d',
+              remainingFraction: 0.5,
+              resetTime: undefined,
+            },
+          ],
+        },
+      ],
     });
 
     const entry = await requestAccountQuota(
       createTarget({
-        provider: 'gemini-cli',
+        provider: 'antigravity',
         authIndex: '2',
-        fileName: 'gemini-cli.json',
+        fileName: 'antigravity.json',
       }),
       t
     );
 
-    expect(entry.metaLabels).toEqual([
-      'Gemini CLI Quota',
-      'Tier: Ultra',
-      'Google One AI Credits: 7 credits',
-    ]);
+    expect(entry.metaLabels).toEqual(['Antigravity Quota']);
     expect(entry.windows).toMatchObject([
       {
-        id: 'gemini-pro-series',
-        label: 'Gemini Pro Series',
+        id: 'agent',
+        label: 'Agent',
         remainingPercent: 25,
         resetLabel: '-',
-        usageLabel: 'Remaining 12 · tokens',
+        usageLabel: null,
       },
     ]);
-    expect(fetchGeminiCliCodeAssist).toHaveBeenCalledWith('2', 'project-1', t);
   });
 
   it('maps xAI billing into account quota entries', async () => {
@@ -346,7 +872,7 @@ describe('monitoringCenterPageModel account quota', () => {
           id: 'monthly-limit',
           label: 'Monthly billing limit',
           remainingPercent: 75,
-          usageLabel: '$25.00 / $100.00',
+          usageLabel: '$75.00 / $100.00 remaining',
         },
       ],
     });

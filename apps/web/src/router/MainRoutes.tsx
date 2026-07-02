@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
-import { Navigate, useLocation, useRoutes, type Location } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import {
+  Navigate,
+  useLocation,
+  useRoutes,
+  type Location,
+  type RouteObject,
+} from 'react-router-dom';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { AiProvidersPage } from '@/pages/AiProvidersPage';
-import { AiProvidersAmpcodeEditPage } from '@/pages/AiProvidersAmpcodeEditPage';
 import { AiProvidersClaudeEditLayout } from '@/pages/AiProvidersClaudeEditLayout';
 import { AiProvidersClaudeEditPage } from '@/pages/AiProvidersClaudeEditPage';
 import { AiProvidersClaudeModelsPage } from '@/pages/AiProvidersClaudeModelsPage';
@@ -17,21 +22,37 @@ import { AuthFilesOAuthExcludedEditPage } from '@/pages/AuthFilesOAuthExcludedEd
 import { AuthFilesOAuthModelAliasEditPage } from '@/pages/AuthFilesOAuthModelAliasEditPage';
 import { OAuthPage } from '@/pages/OAuthPage';
 import { QuotaPage } from '@/pages/QuotaPage';
+import { UsageAnalyticsPage } from '@/pages/UsageAnalyticsPage';
 import { MonitoringCenterPage } from '@/pages/MonitoringCenterPage';
+import { AccountActionCandidatesPage } from '@/pages/AccountActionCandidatesPage';
 import { ModelPricesPage } from '@/pages/ModelPricesPage';
 import { CodexInspectionPage } from '@/pages/CodexInspectionPage';
 import { ServerCodexInspectionPage } from '@/pages/ServerCodexInspectionPage';
 import { ConfigPage } from '@/pages/ConfigPage';
 import { LogsPage } from '@/pages/LogsPage';
+import { PluginResourcePage } from '@/pages/PluginResourcePage';
+import { PluginsPage } from '@/pages/PluginsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { isLogsRouteAvailable } from '@/features/logs/logFeatureAvailability';
-import { useConfigStore } from '@/stores';
+import { ensureRouteBasePathname, isDemoMode } from '@/features/demo/demoMode';
+import { useAuthStore, useConfigStore } from '@/stores';
 import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
 type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection';
+
+function PluginGate({ children }: { children: ReactElement }) {
+  const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
+  if (__DEMO_SITE__ && isDemoMode()) {
+    return children;
+  }
+  if (!supportsPlugin) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
 
 function FeatureGate({
   feature,
@@ -128,7 +149,7 @@ function LogsGate({ children }: { children: ReactElement }) {
   return children;
 }
 
-const mainRoutes = [
+const mainRoutes: RouteObject[] = [
   { path: '/', element: <DashboardPage /> },
   { path: '/dashboard', element: <DashboardPage /> },
   { path: '/settings', element: <Navigate to="/config" replace /> },
@@ -171,7 +192,6 @@ const mainRoutes = [
       { path: 'models', element: <AiProvidersOpenAIModelsPage /> },
     ],
   },
-  { path: '/ai-providers/ampcode', element: <AiProvidersAmpcodeEditPage /> },
   { path: '/ai-providers', element: <AiProvidersPage /> },
   { path: '/ai-providers/*', element: <AiProvidersPage /> },
   { path: '/auth-files', element: <AuthFilesPage /> },
@@ -179,6 +199,14 @@ const mainRoutes = [
   { path: '/auth-files/oauth-model-alias', element: <AuthFilesOAuthModelAliasEditPage /> },
   { path: '/oauth', element: <OAuthPage /> },
   { path: '/quota', element: <QuotaPage /> },
+  {
+    path: '/usage-analytics',
+    element: (
+      <FeatureGate feature="requestMonitoring">
+        <UsageAnalyticsPage />
+      </FeatureGate>
+    ),
+  },
   { path: '/codex-inspection', element: <CodexInspectionPage /> },
   {
     path: '/codex-inspection/server',
@@ -208,6 +236,14 @@ const mainRoutes = [
     ),
   },
   {
+    path: '/monitoring/account-actions',
+    element: (
+      <FeatureGate feature="requestMonitoring">
+        <AccountActionCandidatesPage />
+      </FeatureGate>
+    ),
+  },
+  {
     path: '/monitoring/model-prices',
     element: (
       <FeatureGate feature="modelPrices">
@@ -224,6 +260,33 @@ const mainRoutes = [
       </FeatureGate>
     ),
   },
+  {
+    path: '/plugins',
+    element: (
+      <PluginGate>
+        <PluginsPage />
+      </PluginGate>
+    ),
+  },
+  {
+    path: '/plugin-store',
+    element: (
+      <PluginGate>
+        <Navigate to="/plugins?tab=store" replace />
+      </PluginGate>
+    ),
+  },
+  {
+    path: '/plugin-pages/:pluginId/:menuIndex',
+    element: (
+      <PluginGate>
+        <PluginResourcePage />
+      </PluginGate>
+    ),
+  },
+  { path: '/plugins/*', element: <Navigate to="/plugins" replace /> },
+  { path: '/plugin-store/*', element: <Navigate to="/plugins?tab=store" replace /> },
+  { path: '/plugin-pages/*', element: <Navigate to="/" replace /> },
   { path: '/config', element: <ConfigPage /> },
   {
     path: '/logs',
@@ -237,6 +300,32 @@ const mainRoutes = [
   { path: '*', element: <Navigate to="/" replace /> },
 ];
 
-export function MainRoutes({ location }: { location?: Location }) {
-  return useRoutes(mainRoutes, location);
+const ensureRouteLocationBase = (
+  location: Location | undefined,
+  routeBase: string | undefined
+): Location | undefined => {
+  if (!location || !routeBase) return location;
+
+  const pathname = ensureRouteBasePathname(location.pathname, routeBase);
+  if (pathname === location.pathname) return location;
+
+  return {
+    ...location,
+    pathname,
+  };
+};
+
+export function MainRoutes({
+  location,
+  routeBase,
+}: {
+  location?: Location;
+  routeBase?: string;
+}) {
+  const routeLocation = useMemo(
+    () => ensureRouteLocationBase(location, routeBase),
+    [location, routeBase]
+  );
+
+  return useRoutes(mainRoutes, routeLocation);
 }
