@@ -945,6 +945,63 @@ describe('fetchClaudeQuota', () => {
     ]);
   });
 
+  it('prefers an active percent-only scoped candidate over an inactive reset-only candidate in both orders', async () => {
+    const resetAt = '2026-07-10T10:00:00Z';
+    const activePercentOnly = {
+      kind: 'weekly_scoped',
+      group: 'weekly',
+      percent: 35,
+      scope: { model: { id: 'model-partial', display_name: 'Active partial' } },
+      is_active: true,
+    };
+    const inactiveResetOnly = {
+      kind: 'weekly_scoped',
+      group: 'weekly',
+      percent: null,
+      resets_at: resetAt,
+      scope: { model: { id: 'model-partial', display_name: 'Inactive partial' } },
+      is_active: false,
+    };
+
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { limits: [activePercentOnly, inactiveResetOnly] },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'))
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { limits: [inactiveResetOnly, activePercentOnly] },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const first = await fetchClaudeQuota(
+      { name: 'claude-a.json', type: 'claude', authIndex: 'claude-a' },
+      t
+    );
+    const reversed = await fetchClaudeQuota(
+      { name: 'claude-b.json', type: 'claude', authIndex: 'claude-b' },
+      t
+    );
+
+    const expected = [
+      {
+        id: 'weekly-scoped-id-model-partial',
+        label: 'Active partial',
+        usedPercent: 35,
+        resetLabel: '-',
+      },
+    ];
+    expect(first.windows).toEqual(expected);
+    expect(reversed.windows).toEqual(expected);
+  });
+
   it('ignores unscoped duplicates, unrelated kinds, and malformed scoped limits', async () => {
     mocks.request
       .mockResolvedValueOnce({
@@ -1130,8 +1187,8 @@ describe('fetchClaudeQuota', () => {
     expect(result.windows.map((window) => [window.id, window.label, window.usedPercent])).toEqual([
       ['five-hour', 'claude_quota.five_hour', 10],
       ['seven-day', 'claude_quota.seven_day', 20],
-      ['weekly-scoped-id-model-a1', 'Alpha', 40],
-      ['weekly-scoped-id-model-a2', 'Alpha', 50],
+      ['weekly-scoped-id-model-a1', 'Alpha (model-a1)', 40],
+      ['weekly-scoped-id-model-a2', 'Alpha (model-a2)', 50],
       ['weekly-scoped-id-model-z', 'Zulu renamed', 90],
       ['seven-day-oauth-apps', 'claude_quota.seven_day_oauth_apps', 30],
     ]);
@@ -1150,8 +1207,8 @@ describe('fetchClaudeQuota', () => {
     const withoutId = {
       kind: 'weekly_scoped',
       group: 'weekly',
-      percent: 20,
-      resets_at: '2026-07-09T10:00:00Z',
+      percent: 40,
+      resets_at: resetAt,
       scope: { model: { id: null, display_name: 'Shared Model' } },
       is_active: true,
     };
@@ -1193,6 +1250,80 @@ describe('fetchClaudeQuota', () => {
     ];
     expect(withoutIdFirst.windows).toEqual(expectedWindows);
     expect(withIdFirst.windows).toEqual(expectedWindows);
+  });
+
+  it('preserves non-equivalent label-only scoped data instead of dropping it', async () => {
+    const resetAt = '2026-07-10T10:00:00Z';
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 40,
+              resets_at: resetAt,
+              scope: { model: { id: 'model-shared', display_name: 'Shared Model' } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 20,
+              resets_at: resetAt,
+              scope: { model: { display_name: 'Shared Model' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      { name: 'claude-1.json', type: 'claude', authIndex: 'claude-1' },
+      t
+    );
+
+    expect(result.windows.map((window) => [window.id, window.label, window.usedPercent])).toEqual([
+      ['weekly-scoped-id-model-shared', 'Shared Model (model-shared)', 40],
+      ['weekly-scoped-shared%20model', 'Shared Model', 20],
+    ]);
+  });
+
+  it('ignores unrelated nested display names but accepts model details display names', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 10,
+              scope: { model: { metadata: { display_name: 'Ignored' } } },
+            },
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: 20,
+              scope: { model: { details: { display_name: 'Details model' } } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      { name: 'claude-1.json', type: 'claude', authIndex: 'claude-1' },
+      t
+    );
+
+    expect(result.windows.map((window) => window.label)).toEqual(['Details model']);
   });
 
   it('keeps a label-only scoped entry separate when the label maps to multiple ids', async () => {

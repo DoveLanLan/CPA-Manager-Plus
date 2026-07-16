@@ -516,19 +516,22 @@ const parseClaudeLimitWindowValues = (
   return { usedPercent, resetLabel };
 };
 
-const findClaudeModelDisplayName = (value: unknown, depth = 0): string | null => {
+const findClaudeModelDisplayName = (value: unknown): string | null => {
   if (!isRecord(value)) return null;
 
-  const rawDisplayName = value.display_name ?? value.displayName;
-  if (typeof rawDisplayName === 'string') {
-    const direct = rawDisplayName.trim().replace(/\s+/g, ' ');
-    if (direct) return direct;
-  }
-  if (depth >= 1) return null;
+  const readDisplayName = (candidate: Record<string, unknown>): string | null => {
+    const rawDisplayName = candidate.display_name ?? candidate.displayName;
+    if (typeof rawDisplayName !== 'string') return null;
+    const normalized = rawDisplayName.trim().replace(/\s+/g, ' ');
+    return normalized || null;
+  };
 
-  for (const nested of Object.values(value)) {
-    const label = findClaudeModelDisplayName(nested, depth + 1);
-    if (label) return label;
+  const direct = readDisplayName(value);
+  if (direct) return direct;
+
+  const details = isRecord(value.details) ? value.details : null;
+  if (details) {
+    return readDisplayName(details);
   }
   return null;
 };
@@ -555,24 +558,54 @@ const encodeClaudeWindowIdPart = (value: string): string => {
 type ClaudeScopedWeeklyWindowEntry = {
   activityRank: number;
   identityKey: string;
+  modelId: string | null;
   resetAtRank: number;
   sortLabel: string;
   usedPercentRank: number;
   window: ClaudeQuotaWindow;
 };
 
+const hasValidClaudeReset = (entry: ClaudeScopedWeeklyWindowEntry): boolean =>
+  entry.resetAtRank >= 0;
+
+const getClaudeScopedCompletenessRank = (entry: ClaudeScopedWeeklyWindowEntry): number =>
+  (entry.usedPercentRank >= 0 ? 1 : 0) + (hasValidClaudeReset(entry) ? 1 : 0);
+
 const shouldReplaceClaudeScopedWindow = (
   existing: ClaudeScopedWeeklyWindowEntry,
   candidate: ClaudeScopedWeeklyWindowEntry
 ): boolean => {
-  if (candidate.resetAtRank !== existing.resetAtRank) {
+  if (
+    hasValidClaudeReset(existing) &&
+    hasValidClaudeReset(candidate) &&
+    candidate.resetAtRank !== existing.resetAtRank
+  ) {
     return candidate.resetAtRank > existing.resetAtRank;
   }
   if (candidate.activityRank !== existing.activityRank) {
     return candidate.activityRank > existing.activityRank;
   }
+  const candidateCompleteness = getClaudeScopedCompletenessRank(candidate);
+  const existingCompleteness = getClaudeScopedCompletenessRank(existing);
+  if (candidateCompleteness !== existingCompleteness) {
+    return candidateCompleteness > existingCompleteness;
+  }
+  if (hasValidClaudeReset(existing) !== hasValidClaudeReset(candidate)) {
+    return hasValidClaudeReset(candidate);
+  }
+  if (candidate.resetAtRank !== existing.resetAtRank) {
+    return candidate.resetAtRank > existing.resetAtRank;
+  }
   return candidate.usedPercentRank > existing.usedPercentRank;
 };
+
+const areEquivalentClaudeScopedWindows = (
+  left: ClaudeScopedWeeklyWindowEntry,
+  right: ClaudeScopedWeeklyWindowEntry
+): boolean =>
+  left.activityRank === right.activityRank &&
+  left.resetAtRank === right.resetAtRank &&
+  left.usedPercentRank === right.usedPercentRank;
 
 type ClaudeBaseLimitCandidate = {
   completenessRank: number;
@@ -671,6 +704,7 @@ const buildClaudeScopedWeeklyWindows = (payload: ClaudeUsagePayload): ClaudeQuot
       const candidate: ClaudeScopedWeeklyWindowEntry = {
         activityRank,
         identityKey,
+        modelId,
         resetAtRank: resolveClaudeLimitResetRank(rawLimit),
         sortLabel: labelKey,
         usedPercentRank: values.usedPercent ?? -1,
@@ -701,20 +735,18 @@ const buildClaudeScopedWeeklyWindows = (payload: ClaudeUsagePayload): ClaudeQuot
     if (!identityKey) continue;
     const idEntry = idWindowsByModel.get(identityKey);
     if (!idEntry) continue;
-    if (shouldReplaceClaudeScopedWindow(idEntry, labelEntry)) {
-      idWindowsByModel.set(identityKey, {
-        ...labelEntry,
-        identityKey,
-        window: {
-          ...labelEntry.window,
-          id: idEntry.window.id,
-        },
-      });
+    if (areEquivalentClaudeScopedWindows(idEntry, labelEntry)) {
+      labelOnlyWindowsByModel.delete(labelEntry.identityKey);
     }
-    labelOnlyWindowsByModel.delete(labelEntry.identityKey);
   }
 
-  return [...idWindowsByModel.values(), ...labelOnlyWindowsByModel.values()]
+  const entries = [...idWindowsByModel.values(), ...labelOnlyWindowsByModel.values()];
+  const labelCounts = new Map<string, number>();
+  for (const entry of entries) {
+    labelCounts.set(entry.sortLabel, (labelCounts.get(entry.sortLabel) ?? 0) + 1);
+  }
+
+  return entries
     .sort((left, right) => {
       if (left.sortLabel !== right.sortLabel) {
         return left.sortLabel < right.sortLabel ? -1 : 1;
@@ -725,7 +757,10 @@ const buildClaudeScopedWeeklyWindows = (payload: ClaudeUsagePayload): ClaudeQuot
           ? 1
           : 0;
     })
-    .map(({ window }) => window);
+    .map(({ sortLabel, modelId, window }) => {
+      if (!modelId || (labelCounts.get(sortLabel) ?? 0) < 2) return window;
+      return { ...window, label: `${window.label} (${modelId})` };
+    });
 };
 
 const buildClaudeQuotaWindows = (
