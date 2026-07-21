@@ -6,6 +6,7 @@ import type {
   CodexInspectionRunsResponse,
   DashboardSummaryResponse,
   ManagerConfigResponse,
+  ModelPriceUsageSummaryResponse,
   ModelPricesResponse,
   MonitoringAnalyticsRequest,
   MonitoringAnalyticsResponse,
@@ -62,14 +63,11 @@ const splitTokens = (totalTokens: number) => {
   const cachedTokens = Math.round(totalTokens * 0.13);
   const cacheReadTokens = Math.round(cachedTokens * 0.78);
   const cacheCreationTokens = cachedTokens - cacheReadTokens;
-  const reasoningTokens = Math.max(
-    0,
-    totalTokens - inputTokens - outputTokens - cachedTokens
-  );
+  const reasoningTokens = Math.max(0, totalTokens - inputTokens - outputTokens);
   return {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
-    cached_tokens: cachedTokens,
+    cached_tokens: 0,
     cache_read_tokens: cacheReadTokens,
     cache_creation_tokens: cacheCreationTokens,
     reasoning_tokens: reasoningTokens,
@@ -199,6 +197,17 @@ const initialRawConfig: Record<string, unknown> = {
       models: [{ name: 'gpt-5-codex', alias: 'Codex Team' }],
     },
   ],
+  'xai-api-key': [
+    {
+      'api-key': 'xai-demo-team-key',
+      'auth-index': 'xai-api-team-01',
+      prefix: 'xai-team',
+      'base-url': 'https://api.x.ai/v1',
+      priority: 9,
+      websockets: true,
+      models: [{ name: 'grok-4.5', alias: 'Grok Team' }],
+    },
+  ],
   'claude-api-key': [
     {
       'api-key': 'claude-demo-team-key',
@@ -227,7 +236,9 @@ const initialRawConfig: Record<string, unknown> = {
       name: 'OpenAI Compatible',
       prefix: 'openai',
       'base-url': 'https://api.openai.example/v1',
-      'api-key-entries': [{ 'api-key': 'sk-compatible-demo-primary' }],
+      'api-key-entries': [
+        { 'api-key': 'sk-compatible-demo-primary', 'auth-index': 'openai-primary' },
+      ],
       models: [
         { name: 'gpt-4.1', alias: 'GPT-4.1' },
         { name: 'gpt-4.1-mini', alias: 'GPT-4.1 Mini' },
@@ -236,10 +247,37 @@ const initialRawConfig: Record<string, unknown> = {
       'test-model': 'gpt-4.1-mini',
     },
     {
+      // Multi-key OpenAI-compatible provider: monitoring should show "kuaileshifu #1/#2".
+      name: 'kuaileshifu',
+      'base-url': 'https://api.kuaileshifu.example/v1',
+      'api-key-entries': [
+        { 'api-key': 'sk-kuai-demo-key-1111aaaa', 'auth-index': 'kuai-auth-1' },
+        { 'api-key': 'sk-kuai-demo-key-2222bbbb', 'auth-index': 'kuai-auth-2' },
+      ],
+      models: [
+        { name: 'gpt-4.1-mini', alias: 'Kuai Mini' },
+        { name: 'gpt-4.1', alias: 'Kuai Full' },
+      ],
+      priority: 55,
+      'test-model': 'gpt-4.1-mini',
+    },
+    {
+      // Named channel that already includes an ordinal (not multi-key disambiguation).
+      name: 'anyrouter.top #1',
+      'base-url': 'https://anyrouter.top/v1',
+      'api-key-entries': [
+        { 'api-key': 'sk-anyrouter-demo-key', 'auth-index': 'anyrouter-auth-1' },
+      ],
+      models: [{ name: 'gpt-4.1-mini', alias: 'AnyRouter Mini' }],
+      priority: 60,
+    },
+    {
       name: 'Automation Shared Pool',
       prefix: 'auto',
       'base-url': 'https://gateway.example.com/v1',
-      'api-key-entries': [{ 'api-key': 'sk-automation-demo' }],
+      'api-key-entries': [
+        { 'api-key': 'sk-automation-demo', 'auth-index': 'openai-automation-01' },
+      ],
       models: [{ name: 'qwen-plus', alias: 'Qwen Plus' }],
       priority: 70,
     },
@@ -251,7 +289,7 @@ const initialRawConfig: Record<string, unknown> = {
 };
 
 const demoAuthFiles: AuthFilesResponse = {
-  total: 12,
+  total: 18,
   files: [
     {
       name: 'codex-team-01.json',
@@ -265,8 +303,45 @@ const demoAuthFiles: AuthFilesResponse = {
       modified: now() - 2 * hour,
       account_snapshot: 'Platform Team',
       account_id: 'acct_codex_team',
+      plan_type: 'team',
       success: 1842,
       failed: 18,
+    },
+    {
+      // Codex OAuth-style email identity: primary should be the email, secondary "codex".
+      name: 'codex-email-user.json',
+      type: 'codex',
+      provider: 'codex',
+      authIndex: 'codex-email-user-01',
+      disabled: false,
+      status: 'healthy',
+      statusMessage: 'Ready',
+      size: 4680,
+      modified: now() - 90 * minute,
+      account_snapshot: 'fbcabcdef@vip.qq.com',
+      email: 'fbcabcdef@vip.qq.com',
+      account: 'fbcabcdef@vip.qq.com',
+      label: 'codex',
+      account_id: 'acct_codex_email',
+      plan_type: 'plus',
+      success: 640,
+      failed: 6,
+    },
+    {
+      name: 'codex-pro-20x-01.json',
+      type: 'codex',
+      provider: 'codex',
+      authIndex: 'codex-pro-20x-01',
+      disabled: false,
+      status: 'healthy',
+      statusMessage: 'Ready',
+      size: 4960,
+      modified: now() - hour,
+      account_snapshot: 'Pro 20x Workspace',
+      account_id: 'acct_codex_pro_20x',
+      plan_type: 'pro',
+      success: 1260,
+      failed: 8,
     },
     {
       name: 'codex-fallback-02.json',
@@ -280,6 +355,7 @@ const demoAuthFiles: AuthFilesResponse = {
       modified: now() - 6 * hour,
       account_snapshot: 'Automation Pool',
       account_id: 'acct_codex_auto',
+      plan_type: 'team',
       success: 934,
       failed: 42,
     },
@@ -349,6 +425,7 @@ const demoAuthFiles: AuthFilesResponse = {
       failed: 36,
     },
     {
+      // xAI OAuth-style email identity: primary should be the email, secondary "xai".
       name: 'xai-ops.json',
       type: 'xai',
       provider: 'xai',
@@ -357,8 +434,28 @@ const demoAuthFiles: AuthFilesResponse = {
       status: 'healthy',
       size: 3180,
       modified: now() - day,
+      account_snapshot: 'oc0demo01@yijihwjw.com',
+      email: 'oc0demo01@yijihwjw.com',
+      account: 'oc0demo01@yijihwjw.com',
+      label: 'xai',
       success: 294,
       failed: 4,
+    },
+    {
+      name: 'xai-email-user.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-email-user-01',
+      disabled: false,
+      status: 'healthy',
+      size: 3020,
+      modified: now() - 5 * hour,
+      account_snapshot: 'oc1demo02@yijihwjw.com',
+      email: 'oc1demo02@yijihwjw.com',
+      account: 'oc1demo02@yijihwjw.com',
+      label: 'xai',
+      success: 188,
+      failed: 3,
     },
     {
       name: 'openai-support-02.json',
@@ -413,6 +510,48 @@ const demoAuthFiles: AuthFilesResponse = {
       account_snapshot: 'Edge Experiments',
       success: 312,
       failed: 16,
+    },
+    {
+      name: 'kuai-auth-1.json',
+      type: 'openai',
+      provider: 'openai',
+      authIndex: 'kuai-auth-1',
+      disabled: false,
+      status: 'healthy',
+      size: 2680,
+      modified: now() - 2 * hour,
+      account_snapshot: 'kuaileshifu',
+      label: 'kuaileshifu',
+      success: 420,
+      failed: 5,
+    },
+    {
+      name: 'kuai-auth-2.json',
+      type: 'openai',
+      provider: 'openai',
+      authIndex: 'kuai-auth-2',
+      disabled: false,
+      status: 'healthy',
+      size: 2680,
+      modified: now() - 3 * hour,
+      account_snapshot: 'kuaileshifu',
+      label: 'kuaileshifu',
+      success: 360,
+      failed: 4,
+    },
+    {
+      name: 'anyrouter-auth-1.json',
+      type: 'openai',
+      provider: 'openai',
+      authIndex: 'anyrouter-auth-1',
+      disabled: false,
+      status: 'healthy',
+      size: 2540,
+      modified: now() - 4 * hour,
+      account_snapshot: 'anyrouter.top #1',
+      label: 'anyrouter.top #1',
+      success: 280,
+      failed: 3,
     },
   ],
 };
@@ -613,6 +752,18 @@ const demoModelPrices: ModelPricesResponse = {
   },
 };
 
+const demoModelPriceUsageSummary: ModelPriceUsageSummaryResponse = {
+  sampled_events: 1_638,
+  total_events: 1_638,
+  truncated: false,
+  models: [
+    { model: 'gpt-4.1-mini', calls: 520, requested_calls: 520, resolved_calls: 0 },
+    { model: 'claude-sonnet-4-5', calls: 416, requested_calls: 416, resolved_calls: 0 },
+    { model: 'gemini-2.5-pro', calls: 384, requested_calls: 384, resolved_calls: 0 },
+    { model: 'gpt-4.1', calls: 318, requested_calls: 318, resolved_calls: 0 },
+  ],
+};
+
 const demoApiAliases: ApiKeyAlias[] = [
   { apiKeyHash: 'hash_openai_primary', alias: 'OpenAI Primary', updatedAtMs: now() - day },
   { apiKeyHash: 'hash_codex_team', alias: 'Codex Team', updatedAtMs: now() - 2 * hour },
@@ -625,6 +776,11 @@ const demoApiAliases: ApiKeyAlias[] = [
   { apiKeyHash: 'hash_kimi_coding', alias: 'Kimi Coding', updatedAtMs: now() - 9 * hour },
   { apiKeyHash: 'hash_builder_lab', alias: 'Builder Lab', updatedAtMs: now() - 10 * hour },
   { apiKeyHash: 'hash_xai_ops', alias: 'xAI Ops', updatedAtMs: now() - 11 * hour },
+  { apiKeyHash: 'hash_xai_email_user', alias: 'xAI Email User', updatedAtMs: now() - 9 * hour },
+  { apiKeyHash: 'hash_codex_email_user', alias: 'Codex Email User', updatedAtMs: now() - 8 * hour },
+  { apiKeyHash: 'hash_kuai_key_1', alias: 'kuaileshifu #1', updatedAtMs: now() - 6 * hour },
+  { apiKeyHash: 'hash_kuai_key_2', alias: 'kuaileshifu #2', updatedAtMs: now() - 5 * hour },
+  { apiKeyHash: 'hash_anyrouter_top', alias: 'anyrouter.top #1', updatedAtMs: now() - 4 * hour },
   { apiKeyHash: 'hash_deepseek_ops', alias: 'DeepSeek Ops', updatedAtMs: now() - 12 * hour },
 ];
 
@@ -702,7 +858,10 @@ const dashboardBase = (inputNow = now()): DashboardSummaryResponse => {
   const todayTokens = splitTokens(totalTokens);
   const totalCost = round2((totalTokens / 1_000_000) * 22.9);
   const timeline = Array.from({ length: 24 }, (_, hourIndex) => {
-    const hourPoints = healthPoints.slice(hourIndex * bucketsPerHour, (hourIndex + 1) * bucketsPerHour);
+    const hourPoints = healthPoints.slice(
+      hourIndex * bucketsPerHour,
+      (hourIndex + 1) * bucketsPerHour
+    );
     const calls = hourPoints.reduce((sum, point) => sum + point.calls, 0);
     const tokens = hourPoints.reduce((sum, point) => sum + point.tokens, 0);
     const success = hourPoints.reduce((sum, point) => sum + point.success, 0);
@@ -724,11 +883,35 @@ const dashboardBase = (inputNow = now()): DashboardSummaryResponse => {
   const rollingCalls = rollingPoints.reduce((sum, point) => sum + point.calls, 0);
   const rollingTokens = rollingPoints.reduce((sum, point) => sum + point.tokens, 0);
   const modelMix = [
-    { model: 'gpt-4.1-mini', callShare: 0.28, tokenShare: 0.21, costShare: 0.11, successRate: 0.991 },
-    { model: 'claude-sonnet-4-5', callShare: 0.22, tokenShare: 0.27, costShare: 0.3, successRate: 0.982 },
-    { model: 'gemini-2.5-pro', callShare: 0.2, tokenShare: 0.23, costShare: 0.25, successRate: 0.986 },
+    {
+      model: 'gpt-4.1-mini',
+      callShare: 0.28,
+      tokenShare: 0.21,
+      costShare: 0.11,
+      successRate: 0.991,
+    },
+    {
+      model: 'claude-sonnet-4-5',
+      callShare: 0.22,
+      tokenShare: 0.27,
+      costShare: 0.3,
+      successRate: 0.982,
+    },
+    {
+      model: 'gemini-2.5-pro',
+      callShare: 0.2,
+      tokenShare: 0.23,
+      costShare: 0.25,
+      successRate: 0.986,
+    },
     { model: 'gpt-4.1', callShare: 0.17, tokenShare: 0.19, costShare: 0.24, successRate: 0.976 },
-    { model: 'gemini-2.5-flash', callShare: 0.13, tokenShare: 0.1, costShare: 0.1, successRate: 0.994 },
+    {
+      model: 'gemini-2.5-flash',
+      callShare: 0.13,
+      tokenShare: 0.1,
+      costShare: 0.1,
+      successRate: 0.994,
+    },
   ].map((item) => ({
     model: item.model,
     calls: Math.round(totalCalls * item.callShare),
@@ -787,10 +970,26 @@ const dashboardBase = (inputNow = now()): DashboardSummaryResponse => {
       points: healthPoints,
     },
     token_mix: [
-      { key: 'input', tokens: todayTokens.input_tokens, share: safeRate(todayTokens.input_tokens, totalTokens) },
-      { key: 'output', tokens: todayTokens.output_tokens, share: safeRate(todayTokens.output_tokens, totalTokens) },
-      { key: 'cached', tokens: todayTokens.cached_tokens, share: safeRate(todayTokens.cached_tokens, totalTokens) },
-      { key: 'reasoning', tokens: todayTokens.reasoning_tokens, share: safeRate(todayTokens.reasoning_tokens, totalTokens) },
+      {
+        key: 'input',
+        tokens: todayTokens.input_tokens,
+        share: safeRate(todayTokens.input_tokens, totalTokens),
+      },
+      {
+        key: 'output',
+        tokens: todayTokens.output_tokens,
+        share: safeRate(todayTokens.output_tokens, totalTokens),
+      },
+      {
+        key: 'cached',
+        tokens: todayTokens.cached_tokens,
+        share: safeRate(todayTokens.cached_tokens, totalTokens),
+      },
+      {
+        key: 'reasoning',
+        tokens: todayTokens.reasoning_tokens,
+        share: safeRate(todayTokens.reasoning_tokens, totalTokens),
+      },
     ],
     channel_health: [
       {
@@ -884,10 +1083,11 @@ const paginateDemoEvents = (
   beforeMs?: number | null
 ): DemoMonitoringEventsResponse => {
   const sorted = [...items].sort((left, right) => right.timestamp_ms - left.timestamp_ms);
-  const filtered = beforeMs
-    ? sorted.filter((item) => item.timestamp_ms < beforeMs)
-    : sorted;
-  const safeLimit = Math.max(1, Math.min(Math.trunc(limit || filtered.length), filtered.length || 1));
+  const filtered = beforeMs ? sorted.filter((item) => item.timestamp_ms < beforeMs) : sorted;
+  const safeLimit = Math.max(
+    1,
+    Math.min(Math.trunc(limit || filtered.length), filtered.length || 1)
+  );
   const pageItems = filtered.slice(0, safeLimit);
   const last = pageItems[pageItems.length - 1];
   return {
@@ -937,7 +1137,14 @@ const buildMonitoringAnalytics = (
 
   const modelStats = [
     buildNestedModelRow('gpt-4.1-mini', 6200, 48, 4_680_000, 56.2, analyticsNow - 8 * minute),
-    buildNestedModelRow('claude-sonnet-4-5', 4380, 96, 5_720_000, 158.7, analyticsNow - 13 * minute),
+    buildNestedModelRow(
+      'claude-sonnet-4-5',
+      4380,
+      96,
+      5_720_000,
+      158.7,
+      analyticsNow - 13 * minute
+    ),
     buildNestedModelRow('gemini-2.5-pro', 3620, 74, 4_960_000, 124.4, analyticsNow - 21 * minute),
     buildNestedModelRow('gpt-4.1', 2940, 81, 3_840_000, 102.8, analyticsNow - 16 * minute),
     buildNestedModelRow('gemini-2.5-flash', 2140, 24, 1_780_000, 28.9, analyticsNow - 6 * minute),
@@ -952,10 +1159,7 @@ const buildMonitoringAnalytics = (
   const summaryInputTokens = modelStats.reduce((sum, row) => sum + row.input_tokens, 0);
   const summaryOutputTokens = modelStats.reduce((sum, row) => sum + row.output_tokens, 0);
   const summaryCachedTokens = modelStats.reduce((sum, row) => sum + row.cached_tokens, 0);
-  const summaryCacheReadTokens = modelStats.reduce(
-    (sum, row) => sum + row.cache_read_tokens,
-    0
-  );
+  const summaryCacheReadTokens = modelStats.reduce((sum, row) => sum + row.cache_read_tokens, 0);
   const summaryCacheCreationTokens = modelStats.reduce(
     (sum, row) => sum + row.cache_creation_tokens,
     0
@@ -1007,14 +1211,7 @@ const buildMonitoringAnalytics = (
           145.6,
           analyticsNow - 13 * minute
         ),
-        buildNestedModelRow(
-          'claude-haiku-4-5',
-          460,
-          8,
-          600_000,
-          13.1,
-          analyticsNow - 52 * minute
-        ),
+        buildNestedModelRow('claude-haiku-4-5', 460, 8, 600_000, 13.1, analyticsNow - 52 * minute),
       ],
     },
     {
@@ -1065,14 +1262,7 @@ const buildMonitoringAnalytics = (
       average_latency_ms: 1080,
       last_seen_ms: analyticsNow - 10 * minute,
       models: [
-        buildNestedModelRow(
-          'gpt-4.1-mini',
-          2720,
-          24,
-          2_040_000,
-          25.0,
-          analyticsNow - 10 * minute
-        ),
+        buildNestedModelRow('gpt-4.1-mini', 2720, 24, 2_040_000, 25.0, analyticsNow - 10 * minute),
         buildNestedModelRow('gpt-4.1', 820, 15, 660_000, 20.8, analyticsNow - 36 * minute),
       ],
     },
@@ -1092,14 +1282,7 @@ const buildMonitoringAnalytics = (
       last_seen_ms: analyticsNow - 18 * minute,
       models: [
         buildNestedModelRow('gpt-4.1', 440, 24, 520_000, 22.6, analyticsNow - 18 * minute),
-        buildNestedModelRow(
-          'gpt-4.1-mini',
-          1120,
-          22,
-          740_000,
-          9.1,
-          analyticsNow - 28 * minute
-        ),
+        buildNestedModelRow('gpt-4.1-mini', 1120, 22, 740_000, 9.1, analyticsNow - 28 * minute),
       ],
     },
     {
@@ -1117,14 +1300,7 @@ const buildMonitoringAnalytics = (
       average_latency_ms: 980,
       last_seen_ms: analyticsNow - 11 * minute,
       models: [
-        buildNestedModelRow(
-          'gpt-4.1-mini',
-          1800,
-          18,
-          1_240_000,
-          15.2,
-          analyticsNow - 11 * minute
-        ),
+        buildNestedModelRow('gpt-4.1-mini', 1800, 18, 1_240_000, 15.2, analyticsNow - 11 * minute),
         buildNestedModelRow('gpt-4.1', 680, 10, 680_000, 17.2, analyticsNow - 32 * minute),
       ],
     },
@@ -1151,14 +1327,7 @@ const buildMonitoringAnalytics = (
           65.1,
           analyticsNow - 19 * minute
         ),
-        buildNestedModelRow(
-          'claude-haiku-4-5',
-          820,
-          12,
-          860_000,
-          18.4,
-          analyticsNow - 52 * minute
-        ),
+        buildNestedModelRow('claude-haiku-4-5', 820, 12, 860_000, 18.4, analyticsNow - 52 * minute),
       ],
     },
     {
@@ -1184,14 +1353,7 @@ const buildMonitoringAnalytics = (
           15.8,
           analyticsNow - 24 * minute
         ),
-        buildNestedModelRow(
-          'gemini-2.5-pro',
-          600,
-          11,
-          820_000,
-          22.4,
-          analyticsNow - 43 * minute
-        ),
+        buildNestedModelRow('gemini-2.5-pro', 600, 11, 820_000, 22.4, analyticsNow - 43 * minute),
       ],
     },
     {
@@ -1208,7 +1370,9 @@ const buildMonitoringAnalytics = (
       cost: 15.8,
       average_latency_ms: 1710,
       last_seen_ms: analyticsNow - 48 * minute,
-      models: [buildNestedModelRow('qwen-plus', 1220, 36, 980_000, 15.8, analyticsNow - 48 * minute)],
+      models: [
+        buildNestedModelRow('qwen-plus', 1220, 36, 980_000, 15.8, analyticsNow - 48 * minute),
+      ],
     },
     {
       id: 'acct_builder_lab',
@@ -1225,20 +1389,14 @@ const buildMonitoringAnalytics = (
       average_latency_ms: 1320,
       last_seen_ms: analyticsNow - 27 * minute,
       models: [
-        buildNestedModelRow(
-          'gemini-2.5-flash',
-          960,
-          12,
-          820_000,
-          14.4,
-          analyticsNow - 27 * minute
-        ),
+        buildNestedModelRow('gemini-2.5-flash', 960, 12, 820_000, 14.4, analyticsNow - 27 * minute),
       ],
     },
     {
+      // xAI email identity: primary masked email, secondary "xai".
       id: 'acct_ops_console',
-      account_snapshot: 'Ops Console',
-      auth_label_snapshot: 'xAI Ops',
+      account_snapshot: 'oc0demo01@yijihwjw.com',
+      auth_label_snapshot: 'xai',
       auth_provider_snapshot: 'xai',
       auth_indices: ['xai-ops-01'],
       sources: ['ops'],
@@ -1249,7 +1407,106 @@ const buildMonitoringAnalytics = (
       cost: 12.2,
       average_latency_ms: 1490,
       last_seen_ms: analyticsNow - 55 * minute,
-      models: [buildNestedModelRow('grok-4-fast', 860, 14, 690_000, 12.2, analyticsNow - 55 * minute)],
+      models: [
+        buildNestedModelRow('grok-4-fast', 860, 14, 690_000, 12.2, analyticsNow - 55 * minute),
+      ],
+    },
+    {
+      id: 'acct_xai_email_user',
+      account_snapshot: 'oc1demo02@yijihwjw.com',
+      auth_label_snapshot: 'xai',
+      auth_provider_snapshot: 'xai',
+      auth_indices: ['xai-email-user-01'],
+      sources: ['ops'],
+      source_hashes: ['src_xai_email_user'],
+      calls: 520,
+      failure_calls: 8,
+      total_tokens: 410_000,
+      cost: 7.4,
+      average_latency_ms: 1420,
+      last_seen_ms: analyticsNow - 14 * minute,
+      models: [
+        buildNestedModelRow('grok-4-fast', 520, 8, 410_000, 7.4, analyticsNow - 14 * minute),
+      ],
+    },
+    {
+      // Codex email identity: primary masked email, secondary "codex".
+      id: 'acct_codex_email_user',
+      account_snapshot: 'fbcabcdef@vip.qq.com',
+      auth_label_snapshot: 'codex',
+      auth_provider_snapshot: 'codex',
+      auth_indices: ['codex-email-user-01'],
+      sources: ['team'],
+      source_hashes: ['src_codex_email_user'],
+      calls: 980,
+      failure_calls: 12,
+      total_tokens: 780_000,
+      cost: 16.8,
+      average_latency_ms: 1180,
+      last_seen_ms: analyticsNow - 9 * minute,
+      models: [
+        buildNestedModelRow('gpt-4.1-mini', 680, 8, 460_000, 6.2, analyticsNow - 9 * minute),
+        buildNestedModelRow('gpt-4.1', 300, 4, 320_000, 10.6, analyticsNow - 22 * minute),
+      ],
+    },
+    {
+      // Multi-key OpenAI-compatible key #1 → primary "kuaileshifu #1".
+      id: 'acct_kuaileshifu_key_1',
+      account_snapshot: 'kuaileshifu',
+      auth_label_snapshot: 'kuaileshifu',
+      auth_provider_snapshot: 'openai',
+      auth_indices: ['kuai-auth-1'],
+      sources: ['k:sk-kuai-demo-key-1111aaaa'],
+      source_hashes: ['src_kuai_key_1'],
+      calls: 1240,
+      failure_calls: 11,
+      total_tokens: 920_000,
+      cost: 18.6,
+      average_latency_ms: 1040,
+      last_seen_ms: analyticsNow - 5 * minute,
+      models: [
+        buildNestedModelRow('gpt-4.1-mini', 900, 7, 620_000, 9.4, analyticsNow - 5 * minute),
+        buildNestedModelRow('gpt-4.1', 340, 4, 300_000, 9.2, analyticsNow - 17 * minute),
+      ],
+    },
+    {
+      // Multi-key OpenAI-compatible key #2 → primary "kuaileshifu #2".
+      id: 'acct_kuaileshifu_key_2',
+      account_snapshot: 'kuaileshifu',
+      auth_label_snapshot: 'kuaileshifu',
+      auth_provider_snapshot: 'openai',
+      auth_indices: ['kuai-auth-2'],
+      sources: ['k:sk-kuai-demo-key-2222bbbb'],
+      source_hashes: ['src_kuai_key_2'],
+      calls: 980,
+      failure_calls: 9,
+      total_tokens: 740_000,
+      cost: 14.2,
+      average_latency_ms: 1090,
+      last_seen_ms: analyticsNow - 7 * minute,
+      models: [
+        buildNestedModelRow('gpt-4.1-mini', 720, 6, 510_000, 7.8, analyticsNow - 7 * minute),
+        buildNestedModelRow('gpt-4.1', 260, 3, 230_000, 6.4, analyticsNow - 25 * minute),
+      ],
+    },
+    {
+      // Named channel already containing "#1" (not multi-key disambiguation).
+      id: 'acct_anyrouter_top',
+      account_snapshot: 'anyrouter.top #1',
+      auth_label_snapshot: 'anyrouter.top #1',
+      auth_provider_snapshot: 'openai',
+      auth_indices: ['anyrouter-auth-1'],
+      sources: ['k:sk-anyrouter-demo-key'],
+      source_hashes: ['src_anyrouter_top'],
+      calls: 760,
+      failure_calls: 8,
+      total_tokens: 560_000,
+      cost: 9.6,
+      average_latency_ms: 980,
+      last_seen_ms: analyticsNow - 12 * minute,
+      models: [
+        buildNestedModelRow('gpt-4.1-mini', 760, 8, 560_000, 9.6, analyticsNow - 12 * minute),
+      ],
     },
     {
       id: 'acct_edge_experiments',
@@ -1265,7 +1522,9 @@ const buildMonitoringAnalytics = (
       cost: 6.8,
       average_latency_ms: 1580,
       last_seen_ms: analyticsNow - 44 * minute,
-      models: [buildNestedModelRow('deepseek-chat', 740, 20, 610_000, 6.8, analyticsNow - 44 * minute)],
+      models: [
+        buildNestedModelRow('deepseek-chat', 740, 20, 610_000, 6.8, analyticsNow - 44 * minute),
+      ],
     },
   ].map((row) => {
     const tokenSplit = splitTokens(row.total_tokens);
@@ -1333,7 +1592,16 @@ const buildMonitoringAnalytics = (
       cost: 124.4,
       average_latency_ms: 1160,
       last_seen_ms: analyticsNow - 21 * minute,
-      models: [buildNestedModelRow('gemini-2.5-pro', 3620, 74, 4_960_000, 124.4, analyticsNow - 21 * minute)],
+      models: [
+        buildNestedModelRow(
+          'gemini-2.5-pro',
+          3620,
+          74,
+          4_960_000,
+          124.4,
+          analyticsNow - 21 * minute
+        ),
+      ],
     },
     {
       id: 'vertex-regional-01',
@@ -1351,7 +1619,16 @@ const buildMonitoringAnalytics = (
       cost: 28.9,
       average_latency_ms: 1040,
       last_seen_ms: analyticsNow - 6 * minute,
-      models: [buildNestedModelRow('gemini-2.5-flash', 2140, 24, 1_400_000, 28.9, analyticsNow - 6 * minute)],
+      models: [
+        buildNestedModelRow(
+          'gemini-2.5-flash',
+          2140,
+          24,
+          1_400_000,
+          28.9,
+          analyticsNow - 6 * minute
+        ),
+      ],
     },
     {
       id: 'codex-fallback-02',
@@ -1410,8 +1687,8 @@ const buildMonitoringAnalytics = (
       auth_index: 'xai-ops-01',
       source: 'ops',
       source_hash: 'src_xai_ops',
-      account_snapshot: 'Ops Console',
-      auth_label_snapshot: 'xAI Ops',
+      account_snapshot: 'oc0demo01@yijihwjw.com',
+      auth_label_snapshot: 'xai',
       auth_provider_snapshot: 'xai',
       calls: 860,
       failure_calls: 14,
@@ -1420,6 +1697,91 @@ const buildMonitoringAnalytics = (
       average_latency_ms: 1490,
       last_seen_ms: analyticsNow - 55 * minute,
       models: accountStats[10].models,
+    },
+    {
+      id: 'xai-email-user-01',
+      auth_file_snapshot: 'xai-email-user.json',
+      auth_index: 'xai-email-user-01',
+      source: 'ops',
+      source_hash: 'src_xai_email_user',
+      account_snapshot: 'oc1demo02@yijihwjw.com',
+      auth_label_snapshot: 'xai',
+      auth_provider_snapshot: 'xai',
+      calls: 520,
+      failure_calls: 8,
+      total_tokens: 410_000,
+      cost: 7.4,
+      average_latency_ms: 1420,
+      last_seen_ms: analyticsNow - 14 * minute,
+      models: accountStats[11].models,
+    },
+    {
+      id: 'codex-email-user-01',
+      auth_file_snapshot: 'codex-email-user.json',
+      auth_index: 'codex-email-user-01',
+      source: 'team',
+      source_hash: 'src_codex_email_user',
+      account_snapshot: 'fbcabcdef@vip.qq.com',
+      auth_label_snapshot: 'codex',
+      auth_provider_snapshot: 'codex',
+      calls: 980,
+      failure_calls: 12,
+      total_tokens: 780_000,
+      cost: 16.8,
+      average_latency_ms: 1180,
+      last_seen_ms: analyticsNow - 9 * minute,
+      models: accountStats[12].models,
+    },
+    {
+      id: 'kuai-auth-1',
+      auth_file_snapshot: 'kuai-auth-1.json',
+      auth_index: 'kuai-auth-1',
+      source: 'k:sk-kuai-demo-key-1111aaaa',
+      source_hash: 'src_kuai_key_1',
+      account_snapshot: 'kuaileshifu',
+      auth_label_snapshot: 'kuaileshifu',
+      auth_provider_snapshot: 'openai',
+      calls: 1240,
+      failure_calls: 11,
+      total_tokens: 920_000,
+      cost: 18.6,
+      average_latency_ms: 1040,
+      last_seen_ms: analyticsNow - 5 * minute,
+      models: accountStats[13].models,
+    },
+    {
+      id: 'kuai-auth-2',
+      auth_file_snapshot: 'kuai-auth-2.json',
+      auth_index: 'kuai-auth-2',
+      source: 'k:sk-kuai-demo-key-2222bbbb',
+      source_hash: 'src_kuai_key_2',
+      account_snapshot: 'kuaileshifu',
+      auth_label_snapshot: 'kuaileshifu',
+      auth_provider_snapshot: 'openai',
+      calls: 980,
+      failure_calls: 9,
+      total_tokens: 740_000,
+      cost: 14.2,
+      average_latency_ms: 1090,
+      last_seen_ms: analyticsNow - 7 * minute,
+      models: accountStats[14].models,
+    },
+    {
+      id: 'anyrouter-auth-1',
+      auth_file_snapshot: 'anyrouter-auth-1.json',
+      auth_index: 'anyrouter-auth-1',
+      source: 'k:sk-anyrouter-demo-key',
+      source_hash: 'src_anyrouter_top',
+      account_snapshot: 'anyrouter.top #1',
+      auth_label_snapshot: 'anyrouter.top #1',
+      auth_provider_snapshot: 'openai',
+      calls: 760,
+      failure_calls: 8,
+      total_tokens: 560_000,
+      cost: 9.6,
+      average_latency_ms: 980,
+      last_seen_ms: analyticsNow - 12 * minute,
+      models: accountStats[15].models,
     },
     {
       id: 'openai-support-02',
@@ -1488,7 +1850,7 @@ const buildMonitoringAnalytics = (
       cost: 6.8,
       average_latency_ms: 1580,
       last_seen_ms: analyticsNow - 44 * minute,
-      models: accountStats[11].models,
+      models: accountStats[16].models,
     },
   ].map((row) => {
     const tokenSplit = splitTokens(row.total_tokens);
@@ -1679,8 +2041,8 @@ const buildMonitoringAnalytics = (
     {
       id: 'hash_xai_ops',
       api_key_hash: 'hash_xai_ops',
-      account_snapshot: 'Ops Console',
-      auth_label_snapshot: 'xAI Ops',
+      account_snapshot: 'oc0demo01@yijihwjw.com',
+      auth_label_snapshot: 'xai',
       auth_provider_snapshot: 'xai',
       auth_indices: ['xai-ops-01'],
       sources: ['ops'],
@@ -1692,6 +2054,91 @@ const buildMonitoringAnalytics = (
       average_latency_ms: 1490,
       last_seen_ms: analyticsNow - 55 * minute,
       models: accountStats[10].models,
+    },
+    {
+      id: 'hash_xai_email_user',
+      api_key_hash: 'hash_xai_email_user',
+      account_snapshot: 'oc1demo02@yijihwjw.com',
+      auth_label_snapshot: 'xai',
+      auth_provider_snapshot: 'xai',
+      auth_indices: ['xai-email-user-01'],
+      sources: ['ops'],
+      source_hashes: ['src_xai_email_user'],
+      calls: 520,
+      failure_calls: 8,
+      total_tokens: 410_000,
+      cost: 7.4,
+      average_latency_ms: 1420,
+      last_seen_ms: analyticsNow - 14 * minute,
+      models: accountStats[11].models,
+    },
+    {
+      id: 'hash_codex_email_user',
+      api_key_hash: 'hash_codex_email_user',
+      account_snapshot: 'fbcabcdef@vip.qq.com',
+      auth_label_snapshot: 'codex',
+      auth_provider_snapshot: 'codex',
+      auth_indices: ['codex-email-user-01'],
+      sources: ['team'],
+      source_hashes: ['src_codex_email_user'],
+      calls: 980,
+      failure_calls: 12,
+      total_tokens: 780_000,
+      cost: 16.8,
+      average_latency_ms: 1180,
+      last_seen_ms: analyticsNow - 9 * minute,
+      models: accountStats[12].models,
+    },
+    {
+      id: 'hash_kuai_key_1',
+      api_key_hash: 'hash_kuai_key_1',
+      account_snapshot: 'kuaileshifu',
+      auth_label_snapshot: 'kuaileshifu',
+      auth_provider_snapshot: 'openai',
+      auth_indices: ['kuai-auth-1'],
+      sources: ['k:sk-kuai-demo-key-1111aaaa'],
+      source_hashes: ['src_kuai_key_1'],
+      calls: 1240,
+      failure_calls: 11,
+      total_tokens: 920_000,
+      cost: 18.6,
+      average_latency_ms: 1040,
+      last_seen_ms: analyticsNow - 5 * minute,
+      models: accountStats[13].models,
+    },
+    {
+      id: 'hash_kuai_key_2',
+      api_key_hash: 'hash_kuai_key_2',
+      account_snapshot: 'kuaileshifu',
+      auth_label_snapshot: 'kuaileshifu',
+      auth_provider_snapshot: 'openai',
+      auth_indices: ['kuai-auth-2'],
+      sources: ['k:sk-kuai-demo-key-2222bbbb'],
+      source_hashes: ['src_kuai_key_2'],
+      calls: 980,
+      failure_calls: 9,
+      total_tokens: 740_000,
+      cost: 14.2,
+      average_latency_ms: 1090,
+      last_seen_ms: analyticsNow - 7 * minute,
+      models: accountStats[14].models,
+    },
+    {
+      id: 'hash_anyrouter_top',
+      api_key_hash: 'hash_anyrouter_top',
+      account_snapshot: 'anyrouter.top #1',
+      auth_label_snapshot: 'anyrouter.top #1',
+      auth_provider_snapshot: 'openai',
+      auth_indices: ['anyrouter-auth-1'],
+      sources: ['k:sk-anyrouter-demo-key'],
+      source_hashes: ['src_anyrouter_top'],
+      calls: 760,
+      failure_calls: 8,
+      total_tokens: 560_000,
+      cost: 9.6,
+      average_latency_ms: 980,
+      last_seen_ms: analyticsNow - 12 * minute,
+      models: accountStats[15].models,
     },
     {
       id: 'hash_deepseek_ops',
@@ -1708,7 +2155,7 @@ const buildMonitoringAnalytics = (
       cost: 6.8,
       average_latency_ms: 1580,
       last_seen_ms: analyticsNow - 44 * minute,
-      models: accountStats[11].models,
+      models: accountStats[16].models,
     },
   ].map((row) => {
     const tokenSplit = splitTokens(row.total_tokens);
@@ -1824,7 +2271,8 @@ const buildMonitoringAnalytics = (
       provider: 'vertex',
       source: 'regional',
       sourceHash: 'src_vertex_regional',
-      endpoint: '/v1/projects/demo-vertex-regional/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent',
+      endpoint:
+        '/v1/projects/demo-vertex-regional/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent',
       executor: 'worker',
     },
     {
@@ -1897,13 +2345,78 @@ const buildMonitoringAnalytics = (
       apiKeyHash: 'hash_xai_ops',
       authIndex: 'xai-ops-01',
       authFile: 'xai-ops.json',
-      account: 'Ops Console',
-      label: 'xAI Ops',
+      account: 'oc0demo01@yijihwjw.com',
+      label: 'xai',
       provider: 'xai',
       source: 'ops',
       sourceHash: 'src_xai_ops',
       endpoint: '/v1/chat/completions',
       executor: 'ops',
+    },
+    {
+      model: 'grok-4-fast',
+      apiKeyHash: 'hash_xai_email_user',
+      authIndex: 'xai-email-user-01',
+      authFile: 'xai-email-user.json',
+      account: 'oc1demo02@yijihwjw.com',
+      label: 'xai',
+      provider: 'xai',
+      source: 'ops',
+      sourceHash: 'src_xai_email_user',
+      endpoint: '/v1/chat/completions',
+      executor: 'ops',
+    },
+    {
+      model: 'gpt-4.1-mini',
+      apiKeyHash: 'hash_codex_email_user',
+      authIndex: 'codex-email-user-01',
+      authFile: 'codex-email-user.json',
+      account: 'fbcabcdef@vip.qq.com',
+      label: 'codex',
+      provider: 'codex',
+      source: 'team',
+      sourceHash: 'src_codex_email_user',
+      endpoint: '/v1/chat/completions',
+      executor: 'team',
+    },
+    {
+      model: 'gpt-4.1-mini',
+      apiKeyHash: 'hash_kuai_key_1',
+      authIndex: 'kuai-auth-1',
+      authFile: 'kuai-auth-1.json',
+      account: 'kuaileshifu',
+      label: 'kuaileshifu',
+      provider: 'openai',
+      source: 'k:sk-kuai-demo-key-1111aaaa',
+      sourceHash: 'src_kuai_key_1',
+      endpoint: '/v1/chat/completions',
+      executor: 'compat',
+    },
+    {
+      model: 'gpt-4.1',
+      apiKeyHash: 'hash_kuai_key_2',
+      authIndex: 'kuai-auth-2',
+      authFile: 'kuai-auth-2.json',
+      account: 'kuaileshifu',
+      label: 'kuaileshifu',
+      provider: 'openai',
+      source: 'k:sk-kuai-demo-key-2222bbbb',
+      sourceHash: 'src_kuai_key_2',
+      endpoint: '/v1/chat/completions',
+      executor: 'compat',
+    },
+    {
+      model: 'gpt-4.1-mini',
+      apiKeyHash: 'hash_anyrouter_top',
+      authIndex: 'anyrouter-auth-1',
+      authFile: 'anyrouter-auth-1.json',
+      account: 'anyrouter.top #1',
+      label: 'anyrouter.top #1',
+      provider: 'openai',
+      source: 'k:sk-anyrouter-demo-key',
+      sourceHash: 'src_anyrouter_top',
+      endpoint: '/v1/chat/completions',
+      executor: 'compat',
     },
     {
       model: 'deepseek-chat',
@@ -1924,11 +2437,12 @@ const buildMonitoringAnalytics = (
     const profile = eventProfiles[index % eventProfiles.length];
     const failed = index % 9 === 0 || index % 22 === 0;
     const quotaFailure = failed && index % 2 === 0;
-    const inputTokens = 620 + ((index * 113) % 2600);
+    const uncachedInputTokens = 620 + ((index * 113) % 2600);
     const outputTokens = 210 + ((index * 71) % 980);
     const cachedTokens = index % 3 === 0 ? 180 + ((index * 17) % 520) : 0;
+    const inputTokens = uncachedInputTokens + cachedTokens;
     const reasoningTokens = index % 4 === 0 ? 80 + ((index * 13) % 360) : 0;
-    const totalTokens = inputTokens + outputTokens + cachedTokens + reasoningTokens;
+    const totalTokens = inputTokens + outputTokens + reasoningTokens;
     const timestampMs = analyticsNow - (index * 5 + (index % 4)) * minute;
     return {
       request_id: `demo-request-${String(index + 1).padStart(3, '0')}`,
@@ -1956,7 +2470,7 @@ const buildMonitoringAnalytics = (
       executor_type: profile.executor,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
-      cached_tokens: cachedTokens,
+      cached_tokens: 0,
       cache_read_tokens: Math.round(cachedTokens * 0.78),
       cache_creation_tokens: Math.round(cachedTokens * 0.22),
       reasoning_tokens: reasoningTokens,
@@ -2213,10 +2727,7 @@ const buildMonitoringAnalytics = (
     timeline,
     hourly_distribution: Array.from({ length: 24 }, (_, hourIndex) => ({
       hour: hourIndex,
-      calls:
-        24 +
-        ((hourIndex * 11) % 80) +
-        (hourIndex >= 9 && hourIndex <= 18 ? 42 : 0),
+      calls: 24 + ((hourIndex * 11) % 80) + (hourIndex >= 9 && hourIndex <= 18 ? 42 : 0),
       tokens: 24_000 + ((hourIndex * 7100) % 90_000),
     })),
     heatmap,
@@ -2345,9 +2856,9 @@ const buildMonitoringAnalytics = (
         auth_index: 'codex-team-01',
         models: ['gpt-4.1-mini', 'gpt-4.1'],
         endpoints: ['/v1/chat/completions', '/v1/responses'],
-        input_tokens: 1_260_000,
+        input_tokens: 1_520_000,
         output_tokens: 540_000,
-        cached_tokens: 260_000,
+        cached_tokens: 0,
         cache_read_tokens: 210_000,
         cache_creation_tokens: 50_000,
         total_tokens: 2_060_000,
@@ -2366,9 +2877,9 @@ const buildMonitoringAnalytics = (
         auth_index: 'claude-team-01',
         models: ['claude-sonnet-4-5'],
         endpoints: ['/v1/messages'],
-        input_tokens: 1_480_000,
+        input_tokens: 1_660_000,
         output_tokens: 620_000,
-        cached_tokens: 180_000,
+        cached_tokens: 0,
         cache_read_tokens: 150_000,
         cache_creation_tokens: 30_000,
         total_tokens: 2_280_000,
@@ -2515,6 +3026,7 @@ export const getDemoDashboardSummary = () => clone(dashboardBase());
 export const getDemoMonitoringAnalytics = (request?: MonitoringAnalyticsRequest) =>
   clone(buildMonitoringAnalytics(undefined, request));
 export const getDemoModelPrices = () => clone(demoModelPrices);
+export const getDemoModelPriceUsageSummary = () => clone(demoModelPriceUsageSummary);
 export const getDemoUsagePayload = () => {
   const dashboard = dashboardBase();
   return {
@@ -2737,31 +3249,33 @@ export const getDemoConfigYaml = () =>
 
 export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
   const requestUrl = String(payload.url || '');
+  const authIndex = String(payload.authIndex || '');
+  const isCodexPro20x = authIndex === 'codex-pro-20x-01';
   let body: unknown = { data: demoProviderModels.map((model) => ({ id: model.name })) };
 
   if (requestUrl.includes('/wham/usage')) {
     body = {
-      user_id: 'demo-user',
-      account_id: 'acct_codex_team',
-      email: 'platform@example.com',
-      plan_type: 'team',
+      user_id: isCodexPro20x ? 'demo-pro-user' : 'demo-user',
+      account_id: isCodexPro20x ? 'acct_codex_pro_20x' : 'acct_codex_team',
+      email: isCodexPro20x ? 'pro20x@example.com' : 'platform@example.com',
+      plan_type: isCodexPro20x ? 'pro' : 'team',
       rate_limit: {
         allowed: true,
         primary_window: {
-          used_percent: 0.63,
+          used_percent: isCodexPro20x ? 0.71 : 0.63,
           limit_window_seconds: 18000,
-          reset_after_seconds: 8280,
+          reset_after_seconds: isCodexPro20x ? 6120 : 8280,
         },
         secondary_window: {
-          used_percent: 0.42,
+          used_percent: isCodexPro20x ? 0.48 : 0.42,
           limit_window_seconds: 604800,
-          reset_after_seconds: 246000,
+          reset_after_seconds: isCodexPro20x ? 198000 : 246000,
         },
       },
       code_review_rate_limit: {
         allowed: true,
         primary_window: {
-          used_percent: 0.38,
+          used_percent: isCodexPro20x ? 0.29 : 0.38,
           limit_window_seconds: 18000,
           reset_after_seconds: 7200,
         },
@@ -2769,35 +3283,123 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
       credits: {
         has_credits: true,
         unlimited: false,
-        balance: 18.4,
+        balance: isCodexPro20x ? 42.6 : 18.4,
       },
       rate_limit_reset_credits: {
-        available_count: 2,
+        available_count: isCodexPro20x ? 3 : 2,
       },
       subscription_active_until: new Date(now() + 23 * day).toISOString(),
     };
   } else if (requestUrl.includes('/rate-limit-reset-credits')) {
     body = {
-      available_count: 2,
-      credits: [
-        {
-          id: 'demo-credit-1',
-          status: 'available',
-          granted_at: new Date(now() - day).toISOString(),
-          expires_at: new Date(now() + 6 * day).toISOString(),
-        },
-      ],
+      available_count: isCodexPro20x ? 3 : 2,
+      credits: isCodexPro20x
+        ? [
+            {
+              id: 'demo-pro-credit-1',
+              reset_type: 'codex_rate_limits',
+              status: 'available',
+              granted_at: new Date(now() - 2 * day).toISOString(),
+              expires_at: new Date(now() + 3 * day + 4 * hour).toISOString(),
+            },
+            {
+              id: 'demo-pro-credit-2',
+              reset_type: 'codex_rate_limits',
+              status: 'available',
+              granted_at: new Date(now() - day).toISOString(),
+              expires_at: new Date(now() + 9 * day).toISOString(),
+            },
+            {
+              id: 'demo-pro-credit-3',
+              reset_type: 'codex_rate_limits',
+              status: 'available',
+              granted_at: new Date(now() - 6 * hour).toISOString(),
+              expires_at: new Date(now() + 18 * day).toISOString(),
+            },
+          ]
+        : [
+            {
+              id: 'demo-credit-1',
+              reset_type: 'codex_rate_limits',
+              status: 'available',
+              granted_at: new Date(now() - day).toISOString(),
+              expires_at: new Date(now() + 6 * day).toISOString(),
+            },
+            {
+              id: 'demo-credit-2',
+              reset_type: 'codex_rate_limits',
+              status: 'available',
+              granted_at: new Date(now() - 12 * hour).toISOString(),
+              expires_at: new Date(now() + 14 * day).toISOString(),
+            },
+          ],
     };
   } else if (requestUrl.includes('anthropic.com/api/oauth/profile')) {
-    body = { email: 'research@example.com', organization_name: 'Research Team' };
+    body =
+      authIndex === 'claude-team-01'
+        ? { account: { has_claude_max: true } }
+        : authIndex === 'claude-research-02'
+          ? { account: { has_claude_pro: true } }
+          : { email: 'research@example.com', organization_name: 'Research Team' };
   } else if (requestUrl.includes('anthropic.com/api/oauth/usage')) {
-    body = {
-      plan_type: 'pro',
-      usage: {
-        five_hour: { utilization: 0.44, resets_at: new Date(now() + 2 * hour).toISOString() },
-        seven_day: { utilization: 0.31, resets_at: new Date(now() + 3 * day).toISOString() },
-      },
+    const fiveHour = {
+      utilization: authIndex === 'claude-team-01' ? 44 : 18,
+      resets_at: new Date(now() + 2 * hour).toISOString(),
     };
+    const sevenDay = {
+      utilization: authIndex === 'claude-team-01' ? 31 : 22,
+      resets_at: new Date(now() + 3 * day).toISOString(),
+    };
+    body =
+      authIndex === 'claude-team-01'
+        ? {
+            limits: [
+              {
+                kind: 'session',
+                group: 'session',
+                percent: fiveHour.utilization,
+                resets_at: fiveHour.resets_at,
+                scope: null,
+                is_active: true,
+              },
+              {
+                kind: 'weekly_all',
+                group: 'weekly',
+                percent: sevenDay.utilization,
+                resets_at: sevenDay.resets_at,
+                scope: null,
+                is_active: true,
+              },
+              {
+                kind: 'weekly_scoped',
+                group: 'weekly',
+                percent: 78,
+                resets_at: new Date(now() + 4 * day).toISOString(),
+                scope: { model: { display_name: 'Demo Model A' } },
+                is_active: true,
+              },
+              {
+                kind: 'model_scoped',
+                group: 'weekly',
+                percent: 12,
+                resets_at: new Date(now() + 4 * day).toISOString(),
+                scope: { model: { displayName: 'Demo Model B' } },
+                is_active: false,
+              },
+              {
+                kind: 'model_scoped',
+                group: 'weekly',
+                percent: 42,
+                resets_at: new Date(now() + 5 * day).toISOString(),
+                scope: { model: { displayName: 'Demo Model B' } },
+                is_active: false,
+              },
+            ],
+          }
+        : {
+            five_hour: fiveHour,
+            seven_day: sevenDay,
+          };
   } else if (requestUrl.includes('api.kimi.com')) {
     body = {
       items: [
@@ -2829,7 +3431,9 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
       paidTier: {
         id: 'g1-pro-tier',
         name: 'Pro',
-        availableCredits: [{ creditType: 'monthly', creditAmount: 260, minimumCreditAmountForUsage: 1 }],
+        availableCredits: [
+          { creditType: 'monthly', creditAmount: 260, minimumCreditAmountForUsage: 1 },
+        ],
       },
     };
   }

@@ -5,7 +5,11 @@
 import { useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AuthFileItem } from '@/types';
-import { useQuotaStore } from '@/stores';
+import {
+  captureQuotaCacheGeneration,
+  commitIfQuotaCacheCurrent,
+  useQuotaStore,
+} from '@/stores';
 import { getStatusFromError } from '@/utils/quota';
 import {
   buildQuotaFailureState,
@@ -29,6 +33,32 @@ interface LoadQuotaResult<TData> {
   errorStatus?: number;
 }
 
+const DEFAULT_QUOTA_REFRESH_CONCURRENCY = 4;
+
+async function runWithConcurrencyLimit<TInput, TOutput>(
+  items: TInput[],
+  concurrency: number,
+  worker: (item: TInput, index: number) => Promise<TOutput>
+): Promise<TOutput[]> {
+  if (items.length === 0) return [];
+
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results: TOutput[] = [];
+  let nextIndex = 0;
+
+  await Promise.all(
+    Array.from({ length: limit }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await worker(items[currentIndex], currentIndex);
+      }
+    })
+  );
+
+  return results;
+}
+
 export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>) {
   const { t } = useTranslation();
   const quota = useQuotaStore(config.storeSelector);
@@ -48,6 +78,7 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
       if (loadingRef.current) return;
       loadingRef.current = true;
       const requestId = ++requestIdRef.current;
+      const cacheGeneration = captureQuotaCacheGeneration();
       setLoading(true, scope);
 
       try {
@@ -64,8 +95,10 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
           return nextState;
         });
 
-        const results = await Promise.all(
-          targets.map(async (file): Promise<LoadQuotaResult<TData>> => {
+        const results = await runWithConcurrencyLimit(
+          targets,
+          DEFAULT_QUOTA_REFRESH_CONCURRENCY,
+          async (file): Promise<LoadQuotaResult<TData>> => {
             const storeKey = getQuotaStoreKey(config, file);
             try {
               const data = await config.fetchQuota(file, t);
@@ -75,30 +108,32 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
               const errorStatus = getStatusFromError(err);
               return { storeKey, file, status: 'error', error: message, errorStatus };
             }
-          })
+          }
         );
 
         if (requestId !== requestIdRef.current) return;
 
-        setQuota((prev) => {
-          const nextState = { ...prev };
-          results.forEach((result) => {
-            if (result.status === 'success') {
-              nextState[result.storeKey] = config.buildSuccessState(
-                result.data as TData,
-                result.file
-              );
-            } else {
-              nextState[result.storeKey] = buildQuotaFailureState(
-                config,
-                result.error || t('common.unknown_error'),
-                result.errorStatus,
-                result.file,
-                previousStateByStoreKey.get(result.storeKey)
-              );
-            }
+        commitIfQuotaCacheCurrent(cacheGeneration, () => {
+          setQuota((prev) => {
+            const nextState = { ...prev };
+            results.forEach((result) => {
+              if (result.status === 'success') {
+                nextState[result.storeKey] = config.buildSuccessState(
+                  result.data as TData,
+                  result.file
+                );
+              } else {
+                nextState[result.storeKey] = buildQuotaFailureState(
+                  config,
+                  result.error || t('common.unknown_error'),
+                  result.errorStatus,
+                  result.file,
+                  previousStateByStoreKey.get(result.storeKey)
+                );
+              }
+            });
+            return nextState;
           });
-          return nextState;
         });
       } finally {
         if (requestId === requestIdRef.current) {

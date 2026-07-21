@@ -57,14 +57,26 @@ export const TYPE_COLORS: Record<string, TypeColorSet> = {
 };
 
 // Antigravity API configuration
-export const ANTIGRAVITY_QUOTA_URLS = [
+export const ANTIGRAVITY_QUOTA_SUMMARY_URLS = [
+  'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+  'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary',
+  'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+];
+
+export const ANTIGRAVITY_AVAILABLE_MODELS_URLS = [
   'https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
   'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels',
   'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
 ];
 
-export const ANTIGRAVITY_CODE_ASSIST_URL =
-  'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist';
+export const ANTIGRAVITY_QUOTA_URLS = ANTIGRAVITY_QUOTA_SUMMARY_URLS;
+
+export const ANTIGRAVITY_CODE_ASSIST_URLS = [
+  'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+  'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+];
+
+export const ANTIGRAVITY_CODE_ASSIST_URL = ANTIGRAVITY_CODE_ASSIST_URLS[0];
 
 export const ANTIGRAVITY_CLI_VERSION = '1.0.13';
 export const ANTIGRAVITY_CLIENT_NAME = 'aidev_client';
@@ -188,8 +200,16 @@ export const KIMI_REQUEST_HEADERS = {
 };
 
 // xAI/Grok API configuration
-export const XAI_BILLING_URL = 'https://cli-chat-proxy.grok.com/v1/billing';
+export const XAI_BILLING_WEEKLY_URL = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits';
+export const XAI_BILLING_MONTHLY_URL = 'https://cli-chat-proxy.grok.com/v1/billing';
+export const XAI_OFFICIAL_API_ME_URL = 'https://api.x.ai/v1/me';
+export const XAI_GROK_CLIENT_VERSION = '0.2.101';
+export const XAI_GROK_USER_AGENT = 'grok-pager/0.2.101 grok-shell/0.2.101 (macos; aarch64)';
 
 export const XAI_REQUEST_HEADERS = {
   Authorization: 'Bearer $TOKEN$',
+  'x-xai-token-auth': 'xai-grok-cli',
+  'x-grok-client-version': XAI_GROK_CLIENT_VERSION,
+  accept: '*/*',
+  'user-agent': XAI_GROK_USER_AGENT,
 };

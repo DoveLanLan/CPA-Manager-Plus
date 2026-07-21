@@ -52,6 +52,7 @@ type RealtimeEventsPanelProps = {
   failedOnlyActive: boolean;
   eventsHasMore: boolean;
   eventsLoadingMore: boolean;
+  eventsRetentionLimited: boolean;
   eventsTotalCount: number;
   eventsLoadedCount: number;
   overallLoading: boolean;
@@ -575,25 +576,37 @@ function RealtimeFailureStatus({ details, tooltipId, t, onCopy }: RealtimeFailur
 }
 
 const buildRealtimeTokenSummary = (row: MonitoringEventRow, t: TFunction) => {
-  const parts = [
+  const primary = [
     `I ${formatCompactNumber(row.inputTokens)}`,
     `O ${formatCompactNumber(row.outputTokens)}`,
   ];
   if (row.reasoningTokens > 0) {
-    parts.push(`R ${formatCompactNumber(row.reasoningTokens)}`);
+    primary.push(`R ${formatCompactNumber(row.reasoningTokens)}`);
   }
-  parts.push(`C ${formatCompactNumber(row.cachedTokens)}`);
-  if (row.cacheCreationTokens > 0) {
-    parts.push(
-      `${shortLabel(t, 'monitoring.cache_creation_tokens_short', 'monitoring.cache_creation_tokens', 'Create')} ${formatCompactNumber(row.cacheCreationTokens)}`
-    );
+  const cache: string[] = [];
+  const cacheTitle: string[] = [];
+  if (row.cachedTokens > 0) {
+    cache.push(`C ${formatCompactNumber(row.cachedTokens)}`);
+    cacheTitle.push(`${t('monitoring.cached_tokens')}: ${formatCompactNumber(row.cachedTokens)}`);
   }
   if (row.cacheReadTokens > 0) {
-    parts.push(
-      `${shortLabel(t, 'monitoring.cache_read_tokens_short', 'monitoring.cache_read_tokens', 'Read')} ${formatCompactNumber(row.cacheReadTokens)}`
+    cache.push(`CR ${formatCompactNumber(row.cacheReadTokens)}`);
+    cacheTitle.push(
+      `${t('monitoring.cache_read_tokens')}: ${formatCompactNumber(row.cacheReadTokens)}`
     );
   }
-  return parts.join(' · ');
+  if (row.cacheCreationTokens > 0) {
+    cache.push(`CW ${formatCompactNumber(row.cacheCreationTokens)}`);
+    cacheTitle.push(
+      `${t('monitoring.cache_creation_tokens')}: ${formatCompactNumber(row.cacheCreationTokens)}`
+    );
+  }
+  return {
+    primary: primary.join(' · '),
+    cache: cache.join(' · '),
+    cacheTitle: cacheTitle.join('\n'),
+    cacheAriaLabel: cacheTitle.join(', '),
+  };
 };
 
 export function RealtimeEventsPanelActions({
@@ -676,6 +689,7 @@ export function RealtimeEventsPanel({
   failedOnlyActive,
   eventsHasMore,
   eventsLoadingMore,
+  eventsRetentionLimited,
   eventsTotalCount,
   eventsLoadedCount,
   overallLoading,
@@ -799,6 +813,8 @@ export function RealtimeEventsPanel({
                 row.resolvedModel.trim() !== row.model;
               const reasoningEffort = formatOptionalText(row.reasoningEffort);
               const serviceTier = formatOptionalText(row.serviceTier);
+              const requestServiceTier = formatOptionalText(row.requestServiceTier);
+              const responseServiceTier = formatOptionalText(row.responseServiceTier);
               const failureDetails = buildFailureDetails(row, t, locale);
               const failureTooltipId = failureDetails
                 ? `${tooltipIdPrefix}-failure-tooltip-${row.id}`
@@ -807,6 +823,7 @@ export function RealtimeEventsPanel({
               const hasTtftMs = row.ttftMs !== null && row.ttftMs !== undefined;
               const ttftToneClass = getRealtimeDurationToneClass(row.ttftMs);
               const latencyToneClass = getRealtimeDurationToneClass(row.latencyMs);
+              const tokenSummary = buildRealtimeTokenSummary(row, t);
               return (
                 <tr key={row.id} className={row.failed ? styles.logRowFailed : undefined}>
                   <td>
@@ -846,8 +863,13 @@ export function RealtimeEventsPanel({
                       ) : (
                         <span className={styles.mutedCell}>-</span>
                       )}
-                      {serviceTier !== '-' ? (
+                      {requestServiceTier !== '-' ? (
+                        <small>{`${t('monitoring.request_service_tier_short')}: ${requestServiceTier}`}</small>
+                      ) : serviceTier !== '-' ? (
                         <small>{`${shortLabel(t, 'monitoring.service_tier_short', 'monitoring.service_tier')}: ${serviceTier}`}</small>
+                      ) : null}
+                      {responseServiceTier !== '-' ? (
+                        <small>{`${t('monitoring.response_service_tier_short')}: ${responseServiceTier}`}</small>
                       ) : null}
                     </div>
                   </td>
@@ -936,7 +958,17 @@ export function RealtimeEventsPanel({
                   <td>
                     <div className={styles.primaryCell}>
                       <span>{formatCompactNumber(row.totalTokens)}</span>
-                      <small>{buildRealtimeTokenSummary(row, t)}</small>
+                      <small>{tokenSummary.primary}</small>
+                      {tokenSummary.cache ? (
+                        <small
+                          className={styles.realtimeCacheTokenSummary}
+                          title={tokenSummary.cacheTitle}
+                          aria-label={tokenSummary.cacheAriaLabel}
+                          tabIndex={0}
+                        >
+                          {tokenSummary.cache}
+                        </small>
+                      ) : null}
                     </div>
                   </td>
                   <td>{hasPrices ? formatUsd(row.totalCost) : '--'}</td>
@@ -966,7 +998,12 @@ export function RealtimeEventsPanel({
       {rows.length > 0 ? (
         <div className={styles.loadMoreEventsBar}>
           <span className={styles.loadMoreEventsSummary}>
-            {eventsHasMore
+            {eventsRetentionLimited
+              ? t('monitoring.events_retention_limited', {
+                  loaded: eventsLoadedCount,
+                  total: eventsTotalCount,
+                })
+              : eventsHasMore
               ? t('monitoring.events_loaded_summary', {
                   loaded: eventsLoadedCount,
                   total: eventsTotalCount,

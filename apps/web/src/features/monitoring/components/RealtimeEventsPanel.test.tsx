@@ -29,11 +29,15 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.filter_account': 'Account',
     'monitoring.filter_status_failed': 'Failed only',
     'monitoring.filter_provider': 'Provider',
+    'monitoring.cached_tokens': 'Cached Tokens',
+    'monitoring.cache_read_tokens': 'Cache Read Tokens',
+    'monitoring.cache_creation_tokens': 'Cache Creation Tokens',
     'monitoring.load_more_events': 'Load more',
     'monitoring.log_rows': 'Rows',
     'monitoring.no_more_events': 'No more events',
     'monitoring.events_loaded_summary': 'Loaded {{loaded}} of {{total}} events',
     'monitoring.events_all_loaded': 'All {{total}} events loaded',
+    'monitoring.events_retention_limited': 'Kept the newest {{loaded}} of {{total}} events',
     'monitoring.reasoning_effort': 'Effort',
     'monitoring.reasoning_effort_short': 'Effort',
     'monitoring.recent_failures': 'Failures',
@@ -45,6 +49,8 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.result_failed': 'Failed',
     'monitoring.result_success': 'Success',
     'monitoring.service_tier_short': 'Tier',
+    'monitoring.request_service_tier_short': 'Requested tier',
+    'monitoring.response_service_tier_short': 'Reported tier',
     'monitoring.this_call_cost': 'Cost',
     'monitoring.this_call_usage': 'Usage',
     'monitoring.ttft_short': 'TTFT',
@@ -71,6 +77,7 @@ type PanelOverrides = {
   accountDisplayMode?: AccountDisplayMode;
   eventsHasMore?: boolean;
   eventsLoadingMore?: boolean;
+  eventsRetentionLimited?: boolean;
   eventsTotalCount?: number;
   eventsLoadedCount?: number;
 };
@@ -142,6 +149,7 @@ const renderPanel = (row: PanelRow, overrides: PanelOverrides = {}) =>
       failedOnlyActive={false}
       eventsHasMore={overrides.eventsHasMore ?? false}
       eventsLoadingMore={overrides.eventsLoadingMore ?? false}
+      eventsRetentionLimited={overrides.eventsRetentionLimited ?? false}
       eventsTotalCount={overrides.eventsTotalCount ?? 1}
       eventsLoadedCount={overrides.eventsLoadedCount ?? 1}
       overallLoading={false}
@@ -179,6 +187,8 @@ describe('RealtimeEventsPanel', () => {
         executorType: 'codex',
         reasoningEffort: 'medium',
         serviceTier: 'priority',
+        requestServiceTier: 'priority',
+        responseServiceTier: 'default',
         cacheReadTokens: 4,
         cacheCreationTokens: 1,
         failStatusCode: 429,
@@ -192,7 +202,8 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).not.toContain('>Executor: codex<');
     expect(markup).not.toContain('Executor: codex');
     expect(markup).toContain('medium');
-    expect(markup).toContain('Tier: priority');
+    expect(markup).toContain('Requested tier: priority');
+    expect(markup).toContain('Reported tier: default');
     expect(markup).toContain('client-gpt');
     expect(markup).toContain('gpt-5.4');
     expect(markup).not.toContain('Resolved');
@@ -203,7 +214,8 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('Elapsed');
     expect(markup).toContain('1.5 s');
     expect(markup).toContain('20');
-    expect(markup).toContain('I 10 · O 20 · R 3 · C 5 · Create 1 · Read 4');
+    expect(markup).toContain('I 10 · O 20 · R 3');
+    expect(markup).toContain('C 5 · CR 4 · CW 1');
     expect(markup).toContain('role="tooltip"');
     expect(markup).toContain(styles.realtimeFailureTooltip);
     expect(markup).toContain(styles.realtimeFailureTooltipBelow);
@@ -226,10 +238,11 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toMatch(/TTFT<\/span><span class="[^"]+">｜<\/span><span class="[^"]+">Elapsed/);
     expect(markup).toContain(expectedDate);
     expect(markup).toContain(expectedTime);
-    expect(markup).toContain('I 10 · O 20 · C 5');
+    expect(markup).toContain('I 10 · O 20');
+    expect(markup).toContain('C 5');
     expect(markup).not.toContain('R 0');
-    expect(markup).not.toContain('Read 0');
-    expect(markup).not.toContain('Create 0');
+    expect(markup).not.toContain('CR 0');
+    expect(markup).not.toContain('CW 0');
     expect(markup).not.toContain('role="tooltip"');
     expect(markup).not.toContain('aria-describedby=');
     expect(markup).not.toContain('HTTP');
@@ -348,8 +361,25 @@ describe('RealtimeEventsPanel', () => {
     );
 
     expect(markup).toContain('C 4');
-    expect(markup).toContain('Read 4');
-    expect(markup).toContain('Create 1');
+    expect(markup).toContain('CR 4');
+    expect(markup).toContain('CW 1');
+  });
+
+  it('hides zero legacy cache while showing GPT-5.6 cache read and write metrics', () => {
+    const markup = renderPanel(
+      baseRow({
+        model: 'gpt-5.6-sol',
+        inputTokens: 152_600,
+        cachedTokens: 0,
+        cacheReadTokens: 151_000,
+        cacheCreationTokens: 1_000,
+      })
+    );
+
+    expect(markup).not.toContain('C 0');
+    expect(markup).toContain('CR 151.0K · CW 1.0K');
+    expect(markup).toContain('aria-label="Cache Read Tokens: 151.0K, Cache Creation Tokens: 1.0K"');
+    expect(markup).toContain('tabindex="0"');
   });
 
   it('shows the loaded vs total summary with a load-more action when more pages exist', () => {
@@ -372,6 +402,18 @@ describe('RealtimeEventsPanel', () => {
     });
 
     expect(markup).toContain('All 8000 events loaded');
+    expect(markup).not.toContain('Load more');
+  });
+
+  it('shows the retention limit without a load-more action at the memory cap', () => {
+    const markup = renderPanel(baseRow(), {
+      eventsHasMore: false,
+      eventsRetentionLimited: true,
+      eventsLoadedCount: 2000,
+      eventsTotalCount: 8000,
+    });
+
+    expect(markup).toContain('Kept the newest 2000 of 8000 events');
     expect(markup).not.toContain('Load more');
   });
 
