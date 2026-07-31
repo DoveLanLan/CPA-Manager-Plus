@@ -198,8 +198,11 @@ func Migrate(db *sql.DB) error {
 		)`,
 		`create table if not exists clinepass_accounts (
 			id text primary key,
+			provider text not null default 'clinepass',
 			label text not null,
 			session_id text not null,
+			workspace_id text not null default '',
+			server_function_id text not null default '',
 			created_at_ms integer not null,
 			updated_at_ms integer not null
 		)`,
@@ -372,6 +375,9 @@ func Migrate(db *sql.DB) error {
 	if err := ensureQuotaCooldownColumns(db); err != nil {
 		return err
 	}
+	if err := ensureThirdPartyQuotaAccountColumns(db); err != nil {
+		return err
+	}
 	if err := ensureUsageRollupLongContextColumns(db); err != nil {
 		return err
 	}
@@ -379,6 +385,49 @@ func Migrate(db *sql.DB) error {
 		return err
 	}
 	return ensureModelPriceColumns(db)
+}
+
+func ensureThirdPartyQuotaAccountColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(clinepass_accounts)`)
+	if err != nil {
+		return err
+	}
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "provider", definition: "text not null default 'clinepass'"},
+		{name: "workspace_id", definition: "text not null default ''"},
+		{name: "server_function_id", definition: "text not null default ''"},
+	} {
+		if _, ok := existing[column.name]; ok {
+			continue
+		}
+		if _, err := db.Exec(`alter table clinepass_accounts add column ` + column.name + ` ` + column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureDashboardHourlyRollupFormatVersion(db *sql.DB) error {

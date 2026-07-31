@@ -9,12 +9,12 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 )
 
-var ErrSecretProtectorRequired = errors.New("ClinePass credentials require an encrypted store")
+var ErrSecretProtectorRequired = errors.New("third-party quota credentials require an encrypted store")
 
 type Repository interface {
-	List(ctx context.Context) ([]model.ClinePassAccount, error)
-	Get(ctx context.Context, id string) (model.ClinePassAccount, bool, error)
-	Upsert(ctx context.Context, account model.ClinePassAccount) error
+	List(ctx context.Context) ([]model.ThirdPartyQuotaAccount, error)
+	Get(ctx context.Context, id string) (model.ThirdPartyQuotaAccount, bool, error)
+	Upsert(ctx context.Context, account model.ThirdPartyQuotaAccount) error
 	Delete(ctx context.Context, id string) (bool, error)
 }
 
@@ -31,18 +31,28 @@ func New(db *sql.DB, protector ...*security.Protector) Repository {
 	return &repository{db: db, protector: p}
 }
 
-func (r *repository) List(ctx context.Context) ([]model.ClinePassAccount, error) {
-	rows, err := r.db.QueryContext(ctx, `select id, label, session_id, created_at_ms, updated_at_ms
+func (r *repository) List(ctx context.Context) ([]model.ThirdPartyQuotaAccount, error) {
+	rows, err := r.db.QueryContext(ctx, `select id, provider, label, session_id, workspace_id,
+		server_function_id, created_at_ms, updated_at_ms
 		from clinepass_accounts order by created_at_ms asc, id asc`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	items := make([]model.ClinePassAccount, 0)
+	items := make([]model.ThirdPartyQuotaAccount, 0)
 	for rows.Next() {
-		var item model.ClinePassAccount
-		if err := rows.Scan(&item.ID, &item.Label, &item.SessionID, &item.CreatedAtMS, &item.UpdatedAtMS); err != nil {
+		var item model.ThirdPartyQuotaAccount
+		if err := rows.Scan(
+			&item.ID,
+			&item.Provider,
+			&item.Label,
+			&item.Credential,
+			&item.WorkspaceID,
+			&item.ServerFunctionID,
+			&item.CreatedAtMS,
+			&item.UpdatedAtMS,
+		); err != nil {
 			return nil, err
 		}
 		item, err = r.unprotect(item)
@@ -54,47 +64,57 @@ func (r *repository) List(ctx context.Context) ([]model.ClinePassAccount, error)
 	return items, rows.Err()
 }
 
-func (r *repository) Get(ctx context.Context, id string) (model.ClinePassAccount, bool, error) {
-	var item model.ClinePassAccount
-	err := r.db.QueryRowContext(ctx, `select id, label, session_id, created_at_ms, updated_at_ms
+func (r *repository) Get(ctx context.Context, id string) (model.ThirdPartyQuotaAccount, bool, error) {
+	var item model.ThirdPartyQuotaAccount
+	err := r.db.QueryRowContext(ctx, `select id, provider, label, session_id, workspace_id,
+		server_function_id, created_at_ms, updated_at_ms
 		from clinepass_accounts where id = ?`, id).Scan(
 		&item.ID,
+		&item.Provider,
 		&item.Label,
-		&item.SessionID,
+		&item.Credential,
+		&item.WorkspaceID,
+		&item.ServerFunctionID,
 		&item.CreatedAtMS,
 		&item.UpdatedAtMS,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return model.ClinePassAccount{}, false, nil
+		return model.ThirdPartyQuotaAccount{}, false, nil
 	}
 	if err != nil {
-		return model.ClinePassAccount{}, false, err
+		return model.ThirdPartyQuotaAccount{}, false, err
 	}
 	item, err = r.unprotect(item)
 	if err != nil {
-		return model.ClinePassAccount{}, false, err
+		return model.ThirdPartyQuotaAccount{}, false, err
 	}
 	return item, true, nil
 }
 
-func (r *repository) Upsert(ctx context.Context, account model.ClinePassAccount) error {
+func (r *repository) Upsert(ctx context.Context, account model.ThirdPartyQuotaAccount) error {
 	if r.protector == nil {
 		return ErrSecretProtectorRequired
 	}
-	protected, err := r.protector.ProtectString(account.SessionID)
+	protected, err := r.protector.ProtectString(account.Credential)
 	if err != nil {
 		return err
 	}
 	_, err = r.db.ExecContext(ctx, `insert into clinepass_accounts (
-		id, label, session_id, created_at_ms, updated_at_ms
-	) values (?, ?, ?, ?, ?)
+		id, provider, label, session_id, workspace_id, server_function_id, created_at_ms, updated_at_ms
+	) values (?, ?, ?, ?, ?, ?, ?, ?)
 	on conflict(id) do update set
+		provider = excluded.provider,
 		label = excluded.label,
 		session_id = excluded.session_id,
+		workspace_id = excluded.workspace_id,
+		server_function_id = excluded.server_function_id,
 		updated_at_ms = excluded.updated_at_ms`,
 		account.ID,
+		account.Provider,
 		account.Label,
 		protected,
+		account.WorkspaceID,
+		account.ServerFunctionID,
 		account.CreatedAtMS,
 		account.UpdatedAtMS,
 	)
@@ -110,14 +130,14 @@ func (r *repository) Delete(ctx context.Context, id string) (bool, error) {
 	return rows > 0, err
 }
 
-func (r *repository) unprotect(account model.ClinePassAccount) (model.ClinePassAccount, error) {
+func (r *repository) unprotect(account model.ThirdPartyQuotaAccount) (model.ThirdPartyQuotaAccount, error) {
 	if r.protector == nil {
-		return model.ClinePassAccount{}, ErrSecretProtectorRequired
+		return model.ThirdPartyQuotaAccount{}, ErrSecretProtectorRequired
 	}
-	value, err := r.protector.UnprotectString(account.SessionID)
+	value, err := r.protector.UnprotectString(account.Credential)
 	if err != nil {
-		return model.ClinePassAccount{}, err
+		return model.ThirdPartyQuotaAccount{}, err
 	}
-	account.SessionID = value
+	account.Credential = value
 	return account, nil
 }

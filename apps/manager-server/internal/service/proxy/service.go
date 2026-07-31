@@ -47,6 +47,7 @@ var cpaBuiltinManagementPathHeads = map[string]struct{}{
 	"auth-files":                {},
 	"codex-inspection":          {},
 	"clinepass":                 {},
+	"third-party-quota":         {},
 	"config":                    {},
 	"dashboard":                 {},
 	"model-prices":              {},

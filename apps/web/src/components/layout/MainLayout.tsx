@@ -533,7 +533,7 @@ export function MainLayout({ routeBase = '', demoMode = false }: MainLayoutProps
     : null;
   const clinePassNavItem = featureAvailability.managerServiceAvailable && !demoMode
     ? {
-        path: '/clinepass',
+        path: '/third-party-quota',
         label: t('nav.clinepass'),
         shortLabel: navShortLabel('nav.clinepass', t('nav.clinepass')),
         icon: sidebarIcons.clinePass,

@@ -22,7 +22,7 @@ import { AuthFilesOAuthExcludedEditPage } from '@/pages/AuthFilesOAuthExcludedEd
 import { AuthFilesOAuthModelAliasEditPage } from '@/pages/AuthFilesOAuthModelAliasEditPage';
 import { OAuthPage } from '@/pages/OAuthPage';
 import { QuotaPage } from '@/pages/QuotaPage';
-import { ClinePassPage } from '@/pages/ClinePassPage';
+import { ThirdPartyQuotaPage } from '@/pages/ClinePassPage';
 import { UsageAnalyticsPage } from '@/pages/UsageAnalyticsPage';
 import { MonitoringCenterPage } from '@/pages/MonitoringCenterPage';
 import { AccountActionCandidatesPage } from '@/pages/AccountActionCandidatesPage';
@@ -42,7 +42,7 @@ import { ensureRouteBasePathname, isDemoMode } from '@/features/demo/demoMode';
 import { useAuthStore, useConfigStore } from '@/stores';
 import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
-type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection' | 'clinePass';
+type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection' | 'thirdPartyQuota';
 
 function PluginGate({ children }: { children: ReactElement }) {
   const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
@@ -203,13 +203,14 @@ const mainRoutes: RouteObject[] = [
   { path: '/oauth', element: <OAuthPage /> },
   { path: '/quota', element: <QuotaPage /> },
   {
-    path: '/clinepass',
+    path: '/third-party-quota',
     element: (
-      <FeatureGate feature="clinePass">
-        <ClinePassPage />
+      <FeatureGate feature="thirdPartyQuota">
+        <ThirdPartyQuotaPage />
       </FeatureGate>
     ),
   },
+  { path: '/clinepass', element: <Navigate to="/third-party-quota" replace /> },
   {
     path: '/usage-analytics',
     element: (

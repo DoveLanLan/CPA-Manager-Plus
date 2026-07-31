@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	basePath            = "/v0/management/clinepass/accounts"
+	basePath            = "/v0/management/third-party-quota/accounts"
+	legacyBasePath      = "/v0/management/clinepass/accounts"
 	maxAccountBodyBytes = 32 * 1024
 )
 
@@ -28,23 +29,28 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := strings.TrimRight(r.URL.Path, "/")
-	if path == basePath {
-		h.handleCollection(w, r)
+	requestBasePath := basePath
+	if path == legacyBasePath || strings.HasPrefix(path, legacyBasePath+"/") {
+		requestBasePath = legacyBasePath
+	}
+	legacyRequest := requestBasePath == legacyBasePath
+	if path == requestBasePath {
+		h.handleCollection(w, r, legacyRequest)
 		return
 	}
-	if !strings.HasPrefix(path, basePath+"/") {
+	if !strings.HasPrefix(path, requestBasePath+"/") {
 		response.MethodNotAllowed(w)
 		return
 	}
 
-	tail := strings.TrimPrefix(path, basePath+"/")
+	tail := strings.TrimPrefix(path, requestBasePath+"/")
 	if strings.HasSuffix(tail, "/usage-limits") {
 		id := strings.TrimSuffix(tail, "/usage-limits")
 		if id == "" || strings.Contains(id, "/") || r.Method != http.MethodGet {
 			response.MethodNotAllowed(w)
 			return
 		}
-		result, err := h.App.ClinePassService.FetchUsageLimits(r.Context(), id)
+		result, err := h.App.ThirdPartyQuotaService.FetchUsageLimits(r.Context(), id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -60,18 +66,30 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var request clinepasssvc.UpdateAccountRequest
-		if err := decodeJSON(w, r, &request); err != nil {
+		var err error
+		if legacyRequest {
+			var legacy struct {
+				Label     *string `json:"label,omitempty"`
+				SessionID *string `json:"sessionId,omitempty"`
+			}
+			err = decodeJSON(w, r, &legacy)
+			request.Label = legacy.Label
+			request.Credential = legacy.SessionID
+		} else {
+			err = decodeJSON(w, r, &request)
+		}
+		if err != nil {
 			response.Error(w, http.StatusBadRequest, err)
 			return
 		}
-		account, err := h.App.ClinePassService.UpdateAccount(r.Context(), tail, request)
+		account, err := h.App.ThirdPartyQuotaService.UpdateAccount(r.Context(), tail, request)
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
 		response.JSON(w, http.StatusOK, account)
 	case http.MethodDelete:
-		if err := h.App.ClinePassService.DeleteAccount(r.Context(), tail); err != nil {
+		if err := h.App.ThirdPartyQuotaService.DeleteAccount(r.Context(), tail); err != nil {
 			writeServiceError(w, err)
 			return
 		}
@@ -81,10 +99,10 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) handleCollection(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleCollection(w http.ResponseWriter, r *http.Request, legacyRequest bool) {
 	switch r.Method {
 	case http.MethodGet:
-		items, err := h.App.ClinePassService.ListAccounts(r.Context())
+		items, err := h.App.ThirdPartyQuotaService.ListAccounts(r.Context())
 		if err != nil {
 			response.Error(w, http.StatusInternalServerError, err)
 			return
@@ -92,11 +110,26 @@ func (h *Handler) handleCollection(w http.ResponseWriter, r *http.Request) {
 		response.JSON(w, http.StatusOK, map[string]any{"items": items})
 	case http.MethodPost:
 		var request clinepasssvc.CreateAccountRequest
-		if err := decodeJSON(w, r, &request); err != nil {
+		var err error
+		if legacyRequest {
+			var legacy struct {
+				Label     string `json:"label"`
+				SessionID string `json:"sessionId"`
+			}
+			err = decodeJSON(w, r, &legacy)
+			request = clinepasssvc.CreateAccountRequest{
+				Provider:   clinepasssvc.ProviderClinePass,
+				Label:      legacy.Label,
+				Credential: legacy.SessionID,
+			}
+		} else {
+			err = decodeJSON(w, r, &request)
+		}
+		if err != nil {
 			response.Error(w, http.StatusBadRequest, err)
 			return
 		}
-		account, err := h.App.ClinePassService.CreateAccount(r.Context(), request)
+		account, err := h.App.ThirdPartyQuotaService.CreateAccount(r.Context(), request)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -127,7 +160,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	if errors.Is(err, clinepasssvc.ErrAccountNotFound) {
 		response.JSON(w, http.StatusNotFound, map[string]any{
 			"error": err.Error(),
-			"code":  "clinepass_account_not_found",
+			"code":  "third_party_quota_account_not_found",
 		})
 		return
 	}
@@ -143,7 +176,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	if strings.Contains(message, "required") || strings.Contains(message, "at most") || strings.Contains(message, "invalid") {
 		response.JSON(w, http.StatusBadRequest, map[string]any{
 			"error": message,
-			"code":  "clinepass_invalid_request",
+			"code":  "third_party_quota_invalid_request",
 		})
 		return
 	}

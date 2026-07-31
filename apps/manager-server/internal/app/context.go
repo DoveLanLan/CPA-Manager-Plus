@@ -45,7 +45,7 @@ type Context struct {
 	UsageService                   *usagesvc.Service
 	DashboardService               *dashboardsvc.Service
 	CodexInspectionService         *codexinspectionsvc.Service
-	ClinePassService               *clinepasssvc.Service
+	ThirdPartyQuotaService         *clinepasssvc.Service
 	MonitoringService              *monitoringsvc.Service
 	ModelPriceService              *modelpricesvc.Service
 	APIKeyAliasService             *apikeyaliassvc.Service
@@ -87,7 +87,7 @@ func FromExisting(
 		UsageService:                   usagesvc.New(st),
 		DashboardService:               dashboardsvc.New(st, cfg.DashboardHourlyRollupEnabled),
 		CodexInspectionService:         codexinspectionsvc.New(st, managerConfigService),
-		ClinePassService:               clinepasssvc.New(st),
+		ThirdPartyQuotaService:         clinepasssvc.New(st),
 		MonitoringService:              monitoringsvc.New(st, cfg.DashboardHourlyRollupEnabled),
 		ModelPriceService:              modelpricesvc.NewMultiSource(st, modelPriceSyncURL, openRouterModelPriceSyncURL, managerConfigService),
 		APIKeyAliasService:             apikeyaliassvc.New(st),

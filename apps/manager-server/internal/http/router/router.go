@@ -99,6 +99,10 @@ func rootHandler(
 			jsonHandler(clinePassHandler.Handle)(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/v0/management/third-party-quota/") {
+			jsonHandler(clinePassHandler.Handle)(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/v0/management/dashboard/") {
 			jsonHandler(dashboardHandler.Handle)(w, r)
 			return

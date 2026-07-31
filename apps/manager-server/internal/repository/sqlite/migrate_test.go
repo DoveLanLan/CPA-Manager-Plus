@@ -99,6 +99,61 @@ func TestUsageDataMigrationUpgradeAddsChangedRowsAndPreservesV1(t *testing.T) {
 	}
 }
 
+func TestThirdPartyQuotaMigrationPreservesLegacyClinePassAccount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "third-party-quota-migration.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`drop table clinepass_accounts`,
+		`create table clinepass_accounts (
+			id text primary key,
+			label text not null,
+			session_id text not null,
+			created_at_ms integer not null,
+			updated_at_ms integer not null
+		)`,
+		`insert into clinepass_accounts (id, label, session_id, created_at_ms, updated_at_ms)
+			values ('legacy-account', 'Legacy Cline', 'enc:v1:fixture', 10, 20)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup legacy quota table: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	columns := migrationTableColumns(t, db, "clinepass_accounts")
+	for _, column := range []string{"provider", "workspace_id", "server_function_id"} {
+		if !columns[column] {
+			t.Fatalf("quota account columns = %#v, missing %s", columns, column)
+		}
+	}
+	var provider, label, secret, workspaceID, serverFunctionID string
+	if err := db.QueryRow(`select provider, label, session_id, workspace_id, server_function_id
+		from clinepass_accounts where id = 'legacy-account'`).Scan(
+		&provider,
+		&label,
+		&secret,
+		&workspaceID,
+		&serverFunctionID,
+	); err != nil {
+		t.Fatalf("read migrated account: %v", err)
+	}
+	if provider != "clinepass" || label != "Legacy Cline" || secret != "enc:v1:fixture" || workspaceID != "" || serverFunctionID != "" {
+		t.Fatalf("migrated account = provider:%q label:%q secret:%q workspace:%q server:%q",
+			provider, label, secret, workspaceID, serverFunctionID)
+	}
+}
+
 func TestCodexInspectionAutoRecoverySchema(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "codex-inspection.sqlite"))
 	if err != nil {

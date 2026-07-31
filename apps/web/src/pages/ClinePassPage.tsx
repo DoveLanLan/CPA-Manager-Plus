@@ -1,1 +1,1 @@
-export { ClinePassPage } from '@/features/clinepass/ClinePassPage';
+export { ThirdPartyQuotaPage } from '@/features/clinepass/ClinePassPage';

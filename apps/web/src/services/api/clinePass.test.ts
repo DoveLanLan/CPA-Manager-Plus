@@ -13,13 +13,13 @@ vi.mock('./client', () => ({
   apiClient: mocks,
 }));
 
-import { clinePassApi } from './clinePass';
+import { thirdPartyQuotaApi } from './clinePass';
 
 beforeEach(() => {
   Object.values(mocks).forEach((mock) => mock.mockReset());
 });
 
-describe('clinePassApi', () => {
+describe('thirdPartyQuotaApi', () => {
   it('uses the dedicated Manager Server account endpoints', async () => {
     mocks.get.mockResolvedValueOnce({ items: [] }).mockResolvedValueOnce({
       accountId: 'account/one',
@@ -30,24 +30,25 @@ describe('clinePassApi', () => {
     mocks.patch.mockResolvedValue({ id: 'account-1' });
     mocks.delete.mockResolvedValue({ ok: true });
 
-    await clinePassApi.list();
-    await clinePassApi.create({ label: 'Work', sessionId: 'secret' });
-    await clinePassApi.update('account/one', { label: 'Personal' });
-    await clinePassApi.getUsageLimits('account/one');
-    await clinePassApi.delete('account/one');
+    await thirdPartyQuotaApi.list();
+    await thirdPartyQuotaApi.create({ provider: 'clinepass', label: 'Work', credential: 'secret' });
+    await thirdPartyQuotaApi.update('account/one', { label: 'Personal' });
+    await thirdPartyQuotaApi.getUsageLimits('account/one');
+    await thirdPartyQuotaApi.delete('account/one');
 
-    expect(mocks.get).toHaveBeenNthCalledWith(1, '/clinepass/accounts');
-    expect(mocks.post).toHaveBeenCalledWith('/clinepass/accounts', {
+    expect(mocks.get).toHaveBeenNthCalledWith(1, '/third-party-quota/accounts');
+    expect(mocks.post).toHaveBeenCalledWith('/third-party-quota/accounts', {
+      provider: 'clinepass',
       label: 'Work',
-      sessionId: 'secret',
+      credential: 'secret',
     });
-    expect(mocks.patch).toHaveBeenCalledWith('/clinepass/accounts/account%2Fone', {
+    expect(mocks.patch).toHaveBeenCalledWith('/third-party-quota/accounts/account%2Fone', {
       label: 'Personal',
     });
     expect(mocks.get).toHaveBeenNthCalledWith(
       2,
-      '/clinepass/accounts/account%2Fone/usage-limits'
+      '/third-party-quota/accounts/account%2Fone/usage-limits'
     );
-    expect(mocks.delete).toHaveBeenCalledWith('/clinepass/accounts/account%2Fone');
+    expect(mocks.delete).toHaveBeenCalledWith('/third-party-quota/accounts/account%2Fone');
   });
 });

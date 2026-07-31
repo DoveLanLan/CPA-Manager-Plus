@@ -1,46 +1,60 @@
 import { apiClient } from './client';
 
-export type ClinePassAccount = {
+export type ThirdPartyQuotaProvider = 'clinepass' | 'opencode_go';
+
+export type ThirdPartyQuotaAccount = {
   id: string;
+  provider: ThirdPartyQuotaProvider;
   label: string;
+  workspaceId?: string;
+  serverFunctionId?: string;
   createdAtMs: number;
   updatedAtMs: number;
 };
 
-export type ClinePassUsageLimit = {
+export type ThirdPartyQuotaUsageLimit = {
   type: string;
   percentUsed: number;
   resetsAt?: string;
 };
 
-export type ClinePassUsageLimits = {
+export type ThirdPartyQuotaUsageLimits = {
   accountId: string;
+  provider: ThirdPartyQuotaProvider;
   fetchedAtMs: number;
-  limits: ClinePassUsageLimit[];
+  limits: ThirdPartyQuotaUsageLimit[];
+  mine?: boolean;
+  useBalance?: boolean;
+  regions?: string[];
 };
 
-export type CreateClinePassAccount = {
+export type CreateThirdPartyQuotaAccount = {
+  provider: ThirdPartyQuotaProvider;
   label: string;
-  sessionId: string;
+  credential: string;
+  workspaceId?: string;
+  serverFunctionId?: string;
 };
 
-export type UpdateClinePassAccount = {
+export type UpdateThirdPartyQuotaAccount = {
   label?: string;
-  sessionId?: string;
+  credential?: string;
+  workspaceId?: string;
+  serverFunctionId?: string;
 };
 
-const basePath = '/clinepass/accounts';
+const basePath = '/third-party-quota/accounts';
 
-export const clinePassApi = {
-  list: () => apiClient.get<{ items: ClinePassAccount[] }>(basePath),
-  create: (request: CreateClinePassAccount) =>
-    apiClient.post<ClinePassAccount>(basePath, request),
-  update: (id: string, request: UpdateClinePassAccount) =>
-    apiClient.patch<ClinePassAccount>(`${basePath}/${encodeURIComponent(id)}`, request),
+export const thirdPartyQuotaApi = {
+  list: () => apiClient.get<{ items: ThirdPartyQuotaAccount[] }>(basePath),
+  create: (request: CreateThirdPartyQuotaAccount) =>
+    apiClient.post<ThirdPartyQuotaAccount>(basePath, request),
+  update: (id: string, request: UpdateThirdPartyQuotaAccount) =>
+    apiClient.patch<ThirdPartyQuotaAccount>(`${basePath}/${encodeURIComponent(id)}`, request),
   delete: (id: string) =>
     apiClient.delete<{ ok: boolean }>(`${basePath}/${encodeURIComponent(id)}`),
   getUsageLimits: (id: string) =>
-    apiClient.get<ClinePassUsageLimits>(
+    apiClient.get<ThirdPartyQuotaUsageLimits>(
       `${basePath}/${encodeURIComponent(id)}/usage-limits`
     ),
 };
