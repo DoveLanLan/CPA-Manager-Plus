@@ -196,6 +196,13 @@ func Migrate(db *sql.DB) error {
 			value text not null,
 			updated_at_ms integer not null
 		)`,
+		`create table if not exists clinepass_accounts (
+			id text primary key,
+			label text not null,
+			session_id text not null,
+			created_at_ms integer not null,
+			updated_at_ms integer not null
+		)`,
 		`create table if not exists model_prices (
 			model text primary key,
 			prompt_per_1m real not null,

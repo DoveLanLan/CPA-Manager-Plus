@@ -10,6 +10,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/accountaction"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/apikeyalias"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/clinepass"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/codexinspection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/datamigration"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/deadletter"
@@ -47,6 +48,7 @@ type QuotaCooldownUpsert = model.QuotaCooldownUpsert
 type AccountActionCandidate = model.AccountActionCandidate
 type AccountActionCandidateUpsert = model.AccountActionCandidateUpsert
 type AutomationSettings = model.AutomationSettings
+type ClinePassAccount = model.ClinePassAccount
 type DataMigrationState = datamigration.State
 type DataMigrationBatchResult = datamigration.BatchResult
 
@@ -83,16 +85,17 @@ type DashboardHourlyRollupRow = usagerollup.DashboardHourlyRow
 type Store struct {
 	db *sql.DB
 
-	Settings         setting.Repository
-	UsageEvents      usageevent.Repository
-	DeadLetters      deadletter.Repository
-	ModelPrices      modelprice.Repository
-	APIKeyAliases    apikeyalias.Repository
-	AccountActions   accountaction.Repository
-	CodexInspections codexinspection.Repository
-	DataMigrations   datamigration.Repository
-	QuotaCooldowns   quotacooldown.Repository
-	UsageRollups     usagerollup.Repository
+	Settings          setting.Repository
+	ClinePassAccounts clinepass.Repository
+	UsageEvents       usageevent.Repository
+	DeadLetters       deadletter.Repository
+	ModelPrices       modelprice.Repository
+	APIKeyAliases     apikeyalias.Repository
+	AccountActions    accountaction.Repository
+	CodexInspections  codexinspection.Repository
+	DataMigrations    datamigration.Repository
+	QuotaCooldowns    quotacooldown.Repository
+	UsageRollups      usagerollup.Repository
 }
 
 func Open(path string, protector ...*security.Protector) (*Store, error) {
@@ -105,17 +108,18 @@ func Open(path string, protector ...*security.Protector) (*Store, error) {
 
 func New(db *sql.DB, protector ...*security.Protector) *Store {
 	return &Store{
-		db:               db,
-		Settings:         setting.New(db, protector...),
-		UsageEvents:      usageevent.New(db),
-		DeadLetters:      deadletter.New(db),
-		ModelPrices:      modelprice.New(db),
-		APIKeyAliases:    apikeyalias.New(db),
-		AccountActions:   accountaction.New(db),
-		CodexInspections: codexinspection.New(db),
-		DataMigrations:   datamigration.New(db),
-		QuotaCooldowns:   quotacooldown.New(db),
-		UsageRollups:     usagerollup.New(db),
+		db:                db,
+		Settings:          setting.New(db, protector...),
+		ClinePassAccounts: clinepass.New(db, protector...),
+		UsageEvents:       usageevent.New(db),
+		DeadLetters:       deadletter.New(db),
+		ModelPrices:       modelprice.New(db),
+		APIKeyAliases:     apikeyalias.New(db),
+		AccountActions:    accountaction.New(db),
+		CodexInspections:  codexinspection.New(db),
+		DataMigrations:    datamigration.New(db),
+		QuotaCooldowns:    quotacooldown.New(db),
+		UsageRollups:      usagerollup.New(db),
 	}
 }
 
@@ -168,6 +172,22 @@ func (s *Store) LoadBootstrapState(ctx context.Context) (BootstrapState, bool, e
 
 func (s *Store) HasHistoricalData(ctx context.Context) (bool, error) {
 	return s.Settings.HasHistoricalData(ctx)
+}
+
+func (s *Store) ListClinePassAccounts(ctx context.Context) ([]ClinePassAccount, error) {
+	return s.ClinePassAccounts.List(ctx)
+}
+
+func (s *Store) GetClinePassAccount(ctx context.Context, id string) (ClinePassAccount, bool, error) {
+	return s.ClinePassAccounts.Get(ctx, id)
+}
+
+func (s *Store) UpsertClinePassAccount(ctx context.Context, account ClinePassAccount) error {
+	return s.ClinePassAccounts.Upsert(ctx, account)
+}
+
+func (s *Store) DeleteClinePassAccount(ctx context.Context, id string) (bool, error) {
+	return s.ClinePassAccounts.Delete(ctx, id)
 }
 
 func (s *Store) LoadModelPrices(ctx context.Context) (map[string]ModelPrice, error) {

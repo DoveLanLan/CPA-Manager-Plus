@@ -11,6 +11,7 @@ import (
 	apikeyaliassvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/apikeyalias"
 	automationsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/automation"
 	bootstrapsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
+	clinepasssvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/clinepass"
 	codexinspectionsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/codexinspection"
 	collectorsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
 	dashboardsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/dashboard"
@@ -44,6 +45,7 @@ type Context struct {
 	UsageService                   *usagesvc.Service
 	DashboardService               *dashboardsvc.Service
 	CodexInspectionService         *codexinspectionsvc.Service
+	ClinePassService               *clinepasssvc.Service
 	MonitoringService              *monitoringsvc.Service
 	ModelPriceService              *modelpricesvc.Service
 	APIKeyAliasService             *apikeyaliassvc.Service
@@ -85,6 +87,7 @@ func FromExisting(
 		UsageService:                   usagesvc.New(st),
 		DashboardService:               dashboardsvc.New(st, cfg.DashboardHourlyRollupEnabled),
 		CodexInspectionService:         codexinspectionsvc.New(st, managerConfigService),
+		ClinePassService:               clinepasssvc.New(st),
 		MonitoringService:              monitoringsvc.New(st, cfg.DashboardHourlyRollupEnabled),
 		ModelPriceService:              modelpricesvc.NewMultiSource(st, modelPriceSyncURL, openRouterModelPriceSyncURL, managerConfigService),
 		APIKeyAliasService:             apikeyaliassvc.New(st),

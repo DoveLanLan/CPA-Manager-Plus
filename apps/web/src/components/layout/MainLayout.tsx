@@ -24,6 +24,7 @@ import {
   IconSidebarPlugins,
   IconSidebarProviders,
   IconSidebarQuota,
+  IconSidebarClinePass,
   IconSidebarSystem,
   IconSidebarUsage,
 } from '@/components/ui/icons';
@@ -62,6 +63,7 @@ const sidebarIcons: Record<string, ReactNode> = {
   authFiles: <IconSidebarAuthFiles size={SIDEBAR_ICON_SIZE} />,
   oauth: <IconSidebarOauth size={SIDEBAR_ICON_SIZE} />,
   quota: <IconSidebarQuota size={SIDEBAR_ICON_SIZE} />,
+  clinePass: <IconSidebarClinePass size={SIDEBAR_ICON_SIZE} />,
   usageAnalytics: <IconSidebarUsage size={SIDEBAR_ICON_SIZE} />,
   codexInspection: <IconSidebarInspection size={SIDEBAR_ICON_SIZE} />,
   monitoring: <IconSidebarMonitor size={SIDEBAR_ICON_SIZE} />,
@@ -529,6 +531,14 @@ export function MainLayout({ routeBase = '', demoMode = false }: MainLayoutProps
         icon: sidebarIcons.monitoring,
       }
     : null;
+  const clinePassNavItem = featureAvailability.managerServiceAvailable && !demoMode
+    ? {
+        path: '/clinepass',
+        label: t('nav.clinepass'),
+        shortLabel: navShortLabel('nav.clinepass', t('nav.clinepass')),
+        icon: sidebarIcons.clinePass,
+      }
+    : null;
   const operationNavItems: NavItem[] = [
     ...(fileLogsAvailable
       ? [
@@ -599,6 +609,7 @@ export function MainLayout({ routeBase = '', demoMode = false }: MainLayoutProps
         shortLabel: navShortLabel('nav.quota_management', t('nav.quota_management')),
         icon: sidebarIcons.quota,
       },
+      ...(clinePassNavItem ? [clinePassNavItem] : []),
       {
         path: '/codex-inspection',
         label: t('nav.codex_inspection'),

@@ -22,6 +22,7 @@ import { AuthFilesOAuthExcludedEditPage } from '@/pages/AuthFilesOAuthExcludedEd
 import { AuthFilesOAuthModelAliasEditPage } from '@/pages/AuthFilesOAuthModelAliasEditPage';
 import { OAuthPage } from '@/pages/OAuthPage';
 import { QuotaPage } from '@/pages/QuotaPage';
+import { ClinePassPage } from '@/pages/ClinePassPage';
 import { UsageAnalyticsPage } from '@/pages/UsageAnalyticsPage';
 import { MonitoringCenterPage } from '@/pages/MonitoringCenterPage';
 import { AccountActionCandidatesPage } from '@/pages/AccountActionCandidatesPage';
@@ -41,7 +42,7 @@ import { ensureRouteBasePathname, isDemoMode } from '@/features/demo/demoMode';
 import { useAuthStore, useConfigStore } from '@/stores';
 import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
-type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection';
+type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection' | 'clinePass';
 
 function PluginGate({ children }: { children: ReactElement }) {
   const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
@@ -69,7 +70,9 @@ function FeatureGate({
       ? availability.requestMonitoringAvailable
       : feature === 'modelPrices'
         ? availability.modelPricesAvailable
-        : availability.serverCodexInspectionAvailable;
+        : feature === 'serverCodexInspection'
+          ? availability.serverCodexInspectionAvailable
+          : availability.managerServiceAvailable && !(__DEMO_SITE__ && isDemoMode());
 
   if (availability.checking) {
     return fallback ?? <LoadingSpinner />;
@@ -199,6 +202,14 @@ const mainRoutes: RouteObject[] = [
   { path: '/auth-files/oauth-model-alias', element: <AuthFilesOAuthModelAliasEditPage /> },
   { path: '/oauth', element: <OAuthPage /> },
   { path: '/quota', element: <QuotaPage /> },
+  {
+    path: '/clinepass',
+    element: (
+      <FeatureGate feature="clinePass">
+        <ClinePassPage />
+      </FeatureGate>
+    ),
+  },
   {
     path: '/usage-analytics',
     element: (

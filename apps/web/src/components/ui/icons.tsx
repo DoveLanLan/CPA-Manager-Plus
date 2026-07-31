@@ -612,6 +612,17 @@ export function IconSidebarQuota({ size = 20, ...props }: IconProps) {
   );
 }
 
+export function IconSidebarClinePass({ size = 20, ...props }: IconProps) {
+  return (
+    <svg {...sidebarSvgProps} width={size} height={size} {...props}>
+      <path d="m12 3 7 5v8l-7 5-7-5V8l7-5Z" />
+      <path d="M8.5 14.5v-5" />
+      <path d="M12 14.5v-3" />
+      <path d="M15.5 14.5V7.5" />
+    </svg>
+  );
+}
+
 export function IconSidebarPlugins({ size = 20, ...props }: IconProps) {
   return (
     <svg {...sidebarSvgProps} width={size} height={size} {...props}>

@@ -8,6 +8,7 @@ import (
 	accountactioncontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/accountaction"
 	apikeyaliascontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/apikeyalias"
 	automationcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/automation"
+	clinepasscontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/clinepass"
 	codexinspectioncontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/codexinspection"
 	dashboardcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/dashboard"
 	healthcontroller "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/http/controller/health"
@@ -36,6 +37,7 @@ func New(appCtx *app.Context) http.Handler {
 	automationHandler := automationcontroller.New(appCtx)
 	quotaCooldownHandler := &quotacooldowncontroller.Handler{App: appCtx}
 	codexInspectionHandler := &codexinspectioncontroller.Handler{App: appCtx}
+	clinePassHandler := &clinepasscontroller.Handler{App: appCtx}
 	dashboardHandler := &dashboardcontroller.Handler{App: appCtx}
 	monitoringHandler := &monitoringcontroller.Handler{App: appCtx}
 	proxyHandler := &proxycontroller.Handler{App: appCtx}
@@ -53,7 +55,7 @@ func New(appCtx *app.Context) http.Handler {
 	mux.HandleFunc("/usage-service/quota-cooldowns", jsonHandler(quotaCooldownHandler.Handle))
 	mux.HandleFunc("/setup", jsonHandler(setupHandler.Setup))
 	mux.HandleFunc("/management.html", panelHandler.ManagementHTML)
-	mux.HandleFunc("/", rootHandler(appCtx, jsonHandler, usageHandler, modelPriceHandler, apiKeyAliasHandler, accountActionHandler, codexInspectionHandler, dashboardHandler, monitoringHandler, proxyHandler))
+	mux.HandleFunc("/", rootHandler(appCtx, jsonHandler, usageHandler, modelPriceHandler, apiKeyAliasHandler, accountActionHandler, codexInspectionHandler, clinePassHandler, dashboardHandler, monitoringHandler, proxyHandler))
 
 	return middleware.Recovery(middleware.RequestLogger(mux))
 }
@@ -66,6 +68,7 @@ func rootHandler(
 	apiKeyAliasHandler *apikeyaliascontroller.Handler,
 	accountActionHandler *accountactioncontroller.Handler,
 	codexInspectionHandler *codexinspectioncontroller.Handler,
+	clinePassHandler *clinepasscontroller.Handler,
 	dashboardHandler *dashboardcontroller.Handler,
 	monitoringHandler *monitoringcontroller.Handler,
 	proxyHandler *proxycontroller.Handler,
@@ -90,6 +93,10 @@ func rootHandler(
 		}
 		if strings.HasPrefix(r.URL.Path, "/v0/management/codex-inspection") {
 			jsonHandler(codexInspectionHandler.Handle)(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v0/management/clinepass/") {
+			jsonHandler(clinePassHandler.Handle)(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/v0/management/dashboard/") {
