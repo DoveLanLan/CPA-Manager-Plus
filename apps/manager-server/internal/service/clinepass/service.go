@@ -24,13 +24,16 @@ const (
 	ProviderClinePass  = "clinepass"
 	ProviderOpenCodeGo = "opencode_go"
 
-	defaultClinePassUsageLimitsURL   = "https://api.cline.bot/api/v1/users/me/plan/usage-limits"
+	defaultClineAPIBaseURL           = "https://api.cline.bot/api/v1"
+	clineUsageLimitsPath             = "/users/me/plan/usage-limits"
 	defaultOpenCodeServerURL         = "https://opencode.ai/_server"
 	defaultOpenCodeServerFunctionID  = "c7389bd0e731f80f49593e5ee53835475f4e28594dd6bd83eb229bab753498cd"
 	maxCredentialBytes               = 16 * 1024
 	maxUpstreamBodyBytes             = 128 * 1024
 	maxOpenCodeServerFunctionIDBytes = 256
 	maxOpenCodeWorkspaceIDBytes      = 256
+
+	clineUserAgent = "CPA-Manager-Plus third-party quota monitor"
 )
 
 var (
@@ -56,15 +59,27 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
+// WithClineAPIBaseURL points every Cline endpoint at another host. Tests use it
+// to run the whole flow against one fixture server.
+func WithClineAPIBaseURL(rawURL string) Option {
+	return func(service *Service) {
+		if value := strings.TrimRight(strings.TrimSpace(rawURL), "/"); value != "" {
+			service.clineAPIBaseURL = value
+		}
+	}
+}
+
 // WithUsageLimitsURL is retained for compatibility with existing ClinePass tests.
 func WithUsageLimitsURL(rawURL string) Option {
 	return WithClinePassUsageLimitsURL(rawURL)
 }
 
+// WithClinePassUsageLimitsURL overrides only the quota-window endpoint, leaving
+// every other Cline call on the configured base URL.
 func WithClinePassUsageLimitsURL(rawURL string) Option {
 	return func(service *Service) {
 		if value := strings.TrimSpace(rawURL); value != "" {
-			service.clinePassUsageLimitsURL = value
+			service.clineUsageLimitsURL = value
 		}
 	}
 }
@@ -77,27 +92,54 @@ func WithOpenCodeServerURL(rawURL string) Option {
 	}
 }
 
+// WithClineLifetimeWindow tunes how far back the all-time token walk reaches and
+// how long a recorded total is reused.
+func WithClineLifetimeWindow(months int, ttl time.Duration) Option {
+	return func(service *Service) {
+		if months > 0 {
+			service.lifetimeMonths = months
+		}
+		if ttl > 0 {
+			service.lifetimeTTL = ttl
+		}
+	}
+}
+
 type Service struct {
-	store                   accountStore
-	client                  *http.Client
-	clinePassUsageLimitsURL string
-	openCodeServerURL       string
+	store               accountStore
+	client              *http.Client
+	clineAPIBaseURL     string
+	clineUsageLimitsURL string
+	openCodeServerURL   string
+	lifetimeMonths      int
+	lifetimeTTL         time.Duration
+	lifetimeTimeout     time.Duration
+	clock               func() time.Time
+
+	// credentialLocks serialises refresh-token rotation, and lifetimeLocks
+	// serialises the all-time token walk. Both are keyed by account id.
+	credentialLocks keyedMutex
+	lifetimeLocks   keyedMutex
 }
 
 type Account struct {
-	ID               string `json:"id"`
-	Provider         string `json:"provider"`
-	Label            string `json:"label"`
-	WorkspaceID      string `json:"workspaceId,omitempty"`
-	ServerFunctionID string `json:"serverFunctionId,omitempty"`
-	CreatedAtMS      int64  `json:"createdAtMs"`
-	UpdatedAtMS      int64  `json:"updatedAtMs"`
+	ID                     string `json:"id"`
+	Provider               string `json:"provider"`
+	Label                  string `json:"label"`
+	CredentialKind         string `json:"credentialKind"`
+	AccountEmail           string `json:"accountEmail,omitempty"`
+	AccessTokenExpiresAtMS int64  `json:"accessTokenExpiresAtMs,omitempty"`
+	WorkspaceID            string `json:"workspaceId,omitempty"`
+	ServerFunctionID       string `json:"serverFunctionId,omitempty"`
+	CreatedAtMS            int64  `json:"createdAtMs"`
+	UpdatedAtMS            int64  `json:"updatedAtMs"`
 }
 
 type CreateAccountRequest struct {
 	Provider         string `json:"provider"`
 	Label            string `json:"label"`
 	Credential       string `json:"credential"`
+	CredentialKind   string `json:"credentialKind,omitempty"`
 	WorkspaceID      string `json:"workspaceId,omitempty"`
 	ServerFunctionID string `json:"serverFunctionId,omitempty"`
 }
@@ -105,6 +147,7 @@ type CreateAccountRequest struct {
 type UpdateAccountRequest struct {
 	Label            *string `json:"label,omitempty"`
 	Credential       *string `json:"credential,omitempty"`
+	CredentialKind   *string `json:"credentialKind,omitempty"`
 	WorkspaceID      *string `json:"workspaceId,omitempty"`
 	ServerFunctionID *string `json:"serverFunctionId,omitempty"`
 }
@@ -116,13 +159,23 @@ type UsageLimit struct {
 }
 
 type UsageLimits struct {
-	AccountID   string       `json:"accountId"`
-	Provider    string       `json:"provider"`
-	FetchedAtMS int64        `json:"fetchedAtMs"`
-	Limits      []UsageLimit `json:"limits"`
-	Mine        *bool        `json:"mine,omitempty"`
-	UseBalance  *bool        `json:"useBalance,omitempty"`
-	Regions     []string     `json:"regions,omitempty"`
+	AccountID      string       `json:"accountId"`
+	Provider       string       `json:"provider"`
+	CredentialKind string       `json:"credentialKind,omitempty"`
+	FetchedAtMS    int64        `json:"fetchedAtMs"`
+	Limits         []UsageLimit `json:"limits"`
+	Mine           *bool        `json:"mine,omitempty"`
+	UseBalance     *bool        `json:"useBalance,omitempty"`
+	Regions        []string     `json:"regions,omitempty"`
+	Tokens         *TokenUsage  `json:"tokens,omitempty"`
+}
+
+// UsageLimitsOptions carries the per-request choices that are not part of an
+// account's stored state.
+type UsageLimitsOptions struct {
+	// ForceTokenRefresh re-walks the all-time token total instead of reusing the
+	// recorded one. The panel sets it when the operator asks for a refresh.
+	ForceTokenRefresh bool
 }
 
 type UsageError struct {
@@ -143,15 +196,37 @@ func New(store accountStore, options ...Option) *Service {
 		},
 	}
 	service := &Service{
-		store:                   store,
-		client:                  client,
-		clinePassUsageLimitsURL: defaultClinePassUsageLimitsURL,
-		openCodeServerURL:       defaultOpenCodeServerURL,
+		store:             store,
+		client:            client,
+		clineAPIBaseURL:   defaultClineAPIBaseURL,
+		openCodeServerURL: defaultOpenCodeServerURL,
+		lifetimeMonths:    defaultLifetimeMonths,
+		lifetimeTTL:       defaultLifetimeTTL,
+		lifetimeTimeout:   defaultLifetimeTimeout,
+		clock:             time.Now,
 	}
 	for _, option := range options {
 		option(service)
 	}
 	return service
+}
+
+func (s *Service) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
+}
+
+func (s *Service) clineEndpoint(path string) string {
+	return strings.TrimRight(s.clineAPIBaseURL, "/") + path
+}
+
+func (s *Service) clineUsageLimitsTarget() string {
+	if value := strings.TrimSpace(s.clineUsageLimitsURL); value != "" {
+		return value
+	}
+	return s.clineEndpoint(clineUsageLimitsPath)
 }
 
 func (s *Service) ListAccounts(ctx context.Context) ([]Account, error) {
@@ -175,33 +250,42 @@ func (s *Service) CreateAccount(ctx context.Context, request CreateAccountReques
 	if err != nil {
 		return Account{}, err
 	}
-	credential, err := normalizeCredential(provider, request.Credential)
-	if err != nil {
-		return Account{}, err
-	}
-	workspaceID, serverFunctionID, err := normalizeProviderConfig(
-		provider,
-		request.WorkspaceID,
-		request.ServerFunctionID,
-		true,
-	)
-	if err != nil {
-		return Account{}, err
-	}
 	id, err := newAccountID()
 	if err != nil {
 		return Account{}, err
 	}
-	now := time.Now().UnixMilli()
+	now := s.now().UnixMilli()
 	item := model.ThirdPartyQuotaAccount{
-		ID:               id,
-		Provider:         provider,
-		Label:            label,
-		Credential:       credential,
-		WorkspaceID:      workspaceID,
-		ServerFunctionID: serverFunctionID,
-		CreatedAtMS:      now,
-		UpdatedAtMS:      now,
+		ID:          id,
+		Provider:    provider,
+		Label:       label,
+		CreatedAtMS: now,
+		UpdatedAtMS: now,
+	}
+	if provider == ProviderOpenCodeGo {
+		credential, err := normalizeCredential(provider, request.Credential)
+		if err != nil {
+			return Account{}, err
+		}
+		workspaceID, serverFunctionID, err := normalizeProviderConfig(
+			provider,
+			request.WorkspaceID,
+			request.ServerFunctionID,
+			true,
+		)
+		if err != nil {
+			return Account{}, err
+		}
+		item.Credential = credential
+		item.CredentialKind = model.ThirdPartyQuotaCredentialSession
+		item.WorkspaceID = workspaceID
+		item.ServerFunctionID = serverFunctionID
+	} else {
+		input, err := s.resolveClineCredentialInput(ctx, request.Credential, request.CredentialKind)
+		if err != nil {
+			return Account{}, err
+		}
+		applyClineCredentialInput(&item, input)
 	}
 	if err := s.store.UpsertThirdPartyQuotaAccount(ctx, item); err != nil {
 		return Account{}, err
@@ -228,9 +312,21 @@ func (s *Service) UpdateAccount(ctx context.Context, id string, request UpdateAc
 		}
 	}
 	if request.Credential != nil {
-		item.Credential, err = normalizeCredential(item.Provider, *request.Credential)
-		if err != nil {
-			return Account{}, err
+		if item.Provider == ProviderOpenCodeGo {
+			item.Credential, err = normalizeCredential(item.Provider, *request.Credential)
+			if err != nil {
+				return Account{}, err
+			}
+		} else {
+			kind := ""
+			if request.CredentialKind != nil {
+				kind = *request.CredentialKind
+			}
+			input, err := s.resolveClineCredentialInput(ctx, *request.Credential, kind)
+			if err != nil {
+				return Account{}, err
+			}
+			applyClineCredentialInput(&item, input)
 		}
 	}
 	workspaceID := item.WorkspaceID
@@ -250,7 +346,7 @@ func (s *Service) UpdateAccount(ctx context.Context, id string, request UpdateAc
 	if err != nil {
 		return Account{}, err
 	}
-	item.UpdatedAtMS = time.Now().UnixMilli()
+	item.UpdatedAtMS = s.now().UnixMilli()
 	if err := s.store.UpsertThirdPartyQuotaAccount(ctx, item); err != nil {
 		return Account{}, err
 	}
@@ -269,6 +365,10 @@ func (s *Service) DeleteAccount(ctx context.Context, id string) error {
 }
 
 func (s *Service) FetchUsageLimits(ctx context.Context, id string) (UsageLimits, error) {
+	return s.FetchUsageLimitsWithOptions(ctx, id, UsageLimitsOptions{})
+}
+
+func (s *Service) FetchUsageLimitsWithOptions(ctx context.Context, id string, options UsageLimitsOptions) (UsageLimits, error) {
 	item, ok, err := s.store.GetThirdPartyQuotaAccount(ctx, strings.TrimSpace(id))
 	if err != nil {
 		return UsageLimits{}, err
@@ -278,7 +378,7 @@ func (s *Service) FetchUsageLimits(ctx context.Context, id string) (UsageLimits,
 	}
 	switch item.Provider {
 	case ProviderClinePass:
-		return s.fetchClinePassUsageLimits(ctx, item)
+		return s.fetchClinePassUsageLimits(ctx, item, options)
 	case ProviderOpenCodeGo:
 		return s.fetchOpenCodeGoUsageLimits(ctx, item)
 	default:
@@ -286,45 +386,139 @@ func (s *Service) FetchUsageLimits(ctx context.Context, id string) (UsageLimits,
 	}
 }
 
-func (s *Service) fetchClinePassUsageLimits(ctx context.Context, item model.ThirdPartyQuotaAccount) (UsageLimits, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.clinePassUsageLimitsURL, nil)
+// resolveClineCredentialInput turns one pasted value into the credential an
+// account will carry. A value whose shape names its kind is taken at its word;
+// only an opaque value needs a probe, because a refresh token and a session
+// cookie are otherwise indistinguishable and only one of them can renew itself.
+func (s *Service) resolveClineCredentialInput(ctx context.Context, raw string, requestedKind string) (credentialInput, error) {
+	input, err := parseClineCredential(raw, normalizeCredentialKind(requestedKind))
+	if err != nil {
+		return credentialInput{}, err
+	}
+	if input.hint == model.ThirdPartyQuotaCredentialRefreshToken {
+		// A settings document may already carry a minted access token; keep it so
+		// the first refresh is not spent immediately.
+		if input.refreshToken == "" {
+			input.refreshToken = input.secret
+		}
+		return input, nil
+	}
+	if input.hint != "" {
+		return input, nil
+	}
+	if response, ok := s.clineCredentialFromRefreshToken(ctx, input.secret); ok {
+		refreshToken := input.secret
+		if response.refreshToken != "" {
+			refreshToken = response.refreshToken
+		}
+		return credentialInput{
+			secret:       refreshToken,
+			refreshToken: refreshToken,
+			accessToken:  response.accessToken,
+			expiresAtMS:  response.expiresAtMS,
+			accountID:    response.accountID,
+			email:        response.email,
+			hint:         model.ThirdPartyQuotaCredentialRefreshToken,
+		}, nil
+	}
+	input.hint = model.ThirdPartyQuotaCredentialSession
+	return input, nil
+}
+
+func applyClineCredentialInput(item *model.ThirdPartyQuotaAccount, input credentialInput) {
+	item.Credential = input.secret
+	item.CredentialKind = input.hint
+	// Rotating material is replaced wholesale so a credential change cannot leave
+	// the previous kind's secrets behind.
+	item.AccessToken = input.accessToken
+	item.RefreshToken = input.refreshToken
+	item.AccessTokenExpiresAtMS = input.expiresAtMS
+	if input.accountID != "" {
+		item.AccountUserID = input.accountID
+	}
+	if input.email != "" {
+		item.AccountEmail = input.email
+	}
+}
+
+func normalizeCredentialKind(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "auto":
+		return ""
+	case model.ThirdPartyQuotaCredentialAPIKey, "apikey", "key":
+		return model.ThirdPartyQuotaCredentialAPIKey
+	case model.ThirdPartyQuotaCredentialAccessToken, "token":
+		return model.ThirdPartyQuotaCredentialAccessToken
+	case model.ThirdPartyQuotaCredentialRefreshToken, "refresh":
+		return model.ThirdPartyQuotaCredentialRefreshToken
+	case model.ThirdPartyQuotaCredentialSession, "cookie":
+		return model.ThirdPartyQuotaCredentialSession
+	default:
+		return ""
+	}
+}
+
+func (s *Service) fetchClinePassUsageLimits(ctx context.Context, item model.ThirdPartyQuotaAccount, options UsageLimitsOptions) (UsageLimits, error) {
+	accessToken, err := s.clineAccessToken(ctx, &item, "")
 	if err != nil {
 		return UsageLimits{}, err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Origin", "https://app.cline.bot")
-	req.Header.Set("Referer", "https://app.cline.bot/")
-	req.Header.Set("User-Agent", "CPA-Manager-Plus third-party quota monitor")
-	req.AddCookie(&http.Cookie{Name: "cline_session_id", Value: item.Credential})
-
-	res, err := s.client.Do(req)
+	auth, err := clineAuthFor(item, accessToken)
 	if err != nil {
-		return UsageLimits{}, upstreamUnavailable(ProviderClinePass)
+		return UsageLimits{}, err
 	}
-	defer res.Body.Close()
-	body, err := readUpstreamBody(res.Body)
+
+	limits, err := s.fetchClineUsageLimits(ctx, auth)
 	if err != nil {
-		return UsageLimits{}, providerReadError(ProviderClinePass, err)
-	}
-	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
-		return UsageLimits{}, usageStatusError(ProviderClinePass, res.StatusCode)
-	}
-
-	var envelope struct {
-		Data *struct {
-			Limits []struct {
-				Type        string   `json:"type"`
-				PercentUsed *float64 `json:"percentUsed"`
-				ResetsAt    string   `json:"resetsAt"`
-			} `json:"limits"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Data == nil {
-		return UsageLimits{}, invalidResponse(ProviderClinePass)
+		// A refused bearer can be replaced when the account holds a refresh token;
+		// a session cookie or an API key has nothing to renew with.
+		if accessToken == "" || !isCredentialRefusal(err) {
+			return UsageLimits{}, err
+		}
+		refreshed, refreshErr := s.clineAccessToken(ctx, &item, accessToken)
+		if refreshErr != nil {
+			return UsageLimits{}, refreshErr
+		}
+		if auth, err = clineAuthFor(item, refreshed); err != nil {
+			return UsageLimits{}, err
+		}
+		if limits, err = s.fetchClineUsageLimits(ctx, auth); err != nil {
+			return UsageLimits{}, err
+		}
 	}
 
-	limits := make([]UsageLimit, 0, len(envelope.Data.Limits))
-	for _, raw := range envelope.Data.Limits {
+	tokens, dirty := s.fetchClineTokenUsage(ctx, &item, auth, options.ForceTokenRefresh)
+	if dirty {
+		item.UpdatedAtMS = s.now().UnixMilli()
+		if err := s.store.UpsertThirdPartyQuotaAccount(ctx, item); err != nil {
+			return UsageLimits{}, err
+		}
+	}
+
+	return UsageLimits{
+		AccountID:      item.ID,
+		Provider:       item.Provider,
+		CredentialKind: item.CredentialKind,
+		FetchedAtMS:    s.now().UnixMilli(),
+		Limits:         limits,
+		Tokens:         tokens,
+	}, nil
+}
+
+// fetchClineUsageLimits reads the quota windows for one authenticated account.
+func (s *Service) fetchClineUsageLimits(ctx context.Context, auth clineAuth) ([]UsageLimit, error) {
+	var payload struct {
+		Limits []struct {
+			Type        string   `json:"type"`
+			PercentUsed *float64 `json:"percentUsed"`
+			ResetsAt    string   `json:"resetsAt"`
+		} `json:"limits"`
+	}
+	if err := s.clineRequest(ctx, auth, s.clineUsageLimitsTarget(), &payload); err != nil {
+		return nil, err
+	}
+	limits := make([]UsageLimit, 0, len(payload.Limits))
+	for _, raw := range payload.Limits {
 		limitType := strings.TrimSpace(raw.Type)
 		if limitType == "" {
 			continue
@@ -336,12 +530,17 @@ func (s *Service) fetchClinePassUsageLimits(ctx context.Context, item model.Thir
 		})
 	}
 	sortUsageLimits(limits)
-	return UsageLimits{
-		AccountID:   item.ID,
-		Provider:    item.Provider,
-		FetchedAtMS: time.Now().UnixMilli(),
-		Limits:      limits,
-	}, nil
+	return limits, nil
+}
+
+// isCredentialRefusal reports whether an upstream refusal was the credential
+// being rejected rather than, say, the account having no subscription.
+func isCredentialRefusal(err error) bool {
+	var usageError *UsageError
+	if !errors.As(err, &usageError) {
+		return false
+	}
+	return strings.HasSuffix(usageError.Code, "_session_expired")
 }
 
 type openCodeUsageWindow struct {
@@ -379,7 +578,7 @@ func (s *Service) fetchOpenCodeGoUsageLimits(ctx context.Context, item model.Thi
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Origin", "https://opencode.ai")
 	req.Header.Set("Referer", "https://opencode.ai/workspace/"+item.WorkspaceID+"/members")
-	req.Header.Set("User-Agent", "CPA-Manager-Plus third-party quota monitor")
+	req.Header.Set("User-Agent", clineUserAgent)
 	req.Header.Set("X-Server-ID", item.ServerFunctionID)
 	// OpenCode's SolidStart no-JS path assumes its final argument is FormData,
 	// while this query takes a string workspace ID. Use the normal server-function
@@ -419,7 +618,7 @@ func (s *Service) fetchOpenCodeGoUsageLimits(ctx context.Context, item model.Thi
 	if !ok {
 		return UsageLimits{}, invalidResponse(ProviderOpenCodeGo)
 	}
-	fetchedAt := time.Now()
+	fetchedAt := s.now()
 	limits := make([]UsageLimit, 0, 3)
 	for _, window := range []struct {
 		typeName string
@@ -445,13 +644,14 @@ func (s *Service) fetchOpenCodeGoUsageLimits(ctx context.Context, item model.Thi
 	mine := subscription.Mine
 	useBalance := subscription.UseBalance
 	return UsageLimits{
-		AccountID:   item.ID,
-		Provider:    item.Provider,
-		FetchedAtMS: fetchedAt.UnixMilli(),
-		Limits:      limits,
-		Mine:        &mine,
-		UseBalance:  &useBalance,
-		Regions:     subscription.Region,
+		AccountID:      item.ID,
+		Provider:       item.Provider,
+		CredentialKind: item.CredentialKind,
+		FetchedAtMS:    fetchedAt.UnixMilli(),
+		Limits:         limits,
+		Mine:           &mine,
+		UseBalance:     &useBalance,
+		Regions:        subscription.Region,
 	}, nil
 }
 
@@ -681,7 +881,7 @@ func normalizeLabel(value string) (string, error) {
 }
 
 func normalizeCredential(provider, value string) (string, error) {
-	cookieName := "cline_session_id"
+	cookieName := clineSessionCookieName
 	if provider == ProviderOpenCodeGo {
 		cookieName = "auth"
 	}
@@ -716,14 +916,21 @@ func newAccountID() (string, error) {
 }
 
 func accountView(item model.ThirdPartyQuotaAccount) Account {
+	kind := item.CredentialKind
+	if kind == "" {
+		kind = model.ThirdPartyQuotaCredentialSession
+	}
 	return Account{
-		ID:               item.ID,
-		Provider:         item.Provider,
-		Label:            item.Label,
-		WorkspaceID:      item.WorkspaceID,
-		ServerFunctionID: item.ServerFunctionID,
-		CreatedAtMS:      item.CreatedAtMS,
-		UpdatedAtMS:      item.UpdatedAtMS,
+		ID:                     item.ID,
+		Provider:               item.Provider,
+		Label:                  item.Label,
+		CredentialKind:         kind,
+		AccountEmail:           item.AccountEmail,
+		AccessTokenExpiresAtMS: item.AccessTokenExpiresAtMS,
+		WorkspaceID:            item.WorkspaceID,
+		ServerFunctionID:       item.ServerFunctionID,
+		CreatedAtMS:            item.CreatedAtMS,
+		UpdatedAtMS:            item.UpdatedAtMS,
 	}
 }
 

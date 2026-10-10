@@ -2,21 +2,24 @@ package clinepass
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 )
 
 type memoryAccountStore struct {
+	mu    sync.Mutex
 	items map[string]model.ThirdPartyQuotaAccount
 }
 
 func (s *memoryAccountStore) ListThirdPartyQuotaAccounts(context.Context) ([]model.ThirdPartyQuotaAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	items := make([]model.ThirdPartyQuotaAccount, 0, len(s.items))
 	for _, item := range s.items {
 		items = append(items, item)
@@ -25,16 +28,22 @@ func (s *memoryAccountStore) ListThirdPartyQuotaAccounts(context.Context) ([]mod
 }
 
 func (s *memoryAccountStore) GetThirdPartyQuotaAccount(_ context.Context, id string) (model.ThirdPartyQuotaAccount, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	item, ok := s.items[id]
 	return item, ok, nil
 }
 
 func (s *memoryAccountStore) UpsertThirdPartyQuotaAccount(_ context.Context, account model.ThirdPartyQuotaAccount) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.items[account.ID] = account
 	return nil
 }
 
 func (s *memoryAccountStore) DeleteThirdPartyQuotaAccount(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.items[id]; !ok {
 		return false, nil
 	}
@@ -42,41 +51,51 @@ func (s *memoryAccountStore) DeleteThirdPartyQuotaAccount(_ context.Context, id 
 	return true, nil
 }
 
+func (s *memoryAccountStore) account(t *testing.T, id string) model.ThirdPartyQuotaAccount {
+	t.Helper()
+	item, ok, err := s.GetThirdPartyQuotaAccount(context.Background(), id)
+	if err != nil || !ok {
+		t.Fatalf("account %q: ok=%v err=%v", id, ok, err)
+	}
+	return item
+}
+
 func TestFetchUsageLimitsSendsOnlySessionCookieAndNormalizesResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/users/me/plan/usage-limits" {
-			t.Errorf("path = %q", r.URL.Path)
-		}
-		cookies := r.Cookies()
-		if len(cookies) != 1 || cookies[0].Name != "cline_session_id" || cookies[0].Value != "session-value" {
-			t.Errorf("cookies = %#v", cookies)
-		}
-		if r.Header.Get("Origin") != "https://app.cline.bot" {
-			t.Errorf("origin = %q", r.Header.Get("Origin"))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"limits": []map[string]any{
-					{"type": "monthly", "percentUsed": 101.5, "resetsAt": "2026-08-01T00:00:00Z"},
-					{"type": "five_hour", "percentUsed": 17.25, "resetsAt": "2026-07-31T10:00:00Z"},
-					{"type": "weekly", "percentUsed": nil},
+	stub := newClineStub(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		switch r.URL.Path {
+		case "/api/v1/users/me/plan/usage-limits":
+			if r.Header.Get("Origin") != "https://app.cline.bot" {
+				t.Errorf("origin = %q", r.Header.Get("Origin"))
+			}
+			writeClineJSON(w, map[string]any{
+				"data": map[string]any{
+					"limits": []map[string]any{
+						{"type": "monthly", "percentUsed": 101.5, "resetsAt": "2026-08-01T00:00:00Z"},
+						{"type": "five_hour", "percentUsed": 17.25, "resetsAt": "2026-07-31T10:00:00Z"},
+						{"type": "weekly", "percentUsed": nil},
+					},
 				},
-			},
-		})
-	}))
-	t.Cleanup(server.Close)
+			})
+		default:
+			// The token totals are best effort, so this fixture simply has no
+			// profile endpoint and the reading stays limits-only.
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
 
 	store := &memoryAccountStore{items: map[string]model.ThirdPartyQuotaAccount{
-		"account-1": {ID: "account-1", Provider: ProviderClinePass, Label: "Work", Credential: "session-value"},
+		"account-1": {
+			ID:             "account-1",
+			Provider:       ProviderClinePass,
+			Label:          "Work",
+			Credential:     "session-value",
+			CredentialKind: model.ThirdPartyQuotaCredentialSession,
+		},
 	}}
-	service := New(store, WithHTTPClient(server.Client()), WithUsageLimitsURL(server.URL+"/api/v1/users/me/plan/usage-limits"))
+	service := New(store, WithHTTPClient(stub.client()), WithClineAPIBaseURL(stub.baseURL()))
 	result, err := service.FetchUsageLimits(context.Background(), "account-1")
 	if err != nil {
 		t.Fatalf("fetch usage: %v", err)
-	}
-	if len(result.Limits) != 3 {
-		t.Fatalf("limits = %#v", result.Limits)
 	}
 	if result.Limits[0].Type != "five_hour" || result.Limits[0].PercentUsed != 17.25 {
 		t.Fatalf("five-hour limit = %#v", result.Limits[0])
@@ -90,17 +109,31 @@ func TestFetchUsageLimitsSendsOnlySessionCookieAndNormalizesResponse(t *testing.
 	if result.Provider != ProviderClinePass {
 		t.Fatalf("provider = %q", result.Provider)
 	}
+	// Only the session cookie may go upstream, and only on the quota call.
+	for _, request := range stub.snapshot() {
+		if request.cookieValue != "session-value" {
+			t.Fatalf("request %s carried cookie %q", request.path, request.cookieValue)
+		}
+		if request.authorization != "" {
+			t.Fatalf("request %s carried authorization %q", request.path, request.authorization)
+		}
+	}
 }
 
 func TestFetchUsageLimitsMapsExpiredSessionWithoutReturningManagerUnauthorized(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	stub := newClineStub(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
 		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	t.Cleanup(server.Close)
+	})
 	store := &memoryAccountStore{items: map[string]model.ThirdPartyQuotaAccount{
-		"account-1": {ID: "account-1", Provider: ProviderClinePass, Credential: "expired"},
+		"account-1": {
+			ID:             "account-1",
+			Provider:       ProviderClinePass,
+			Label:          "Work",
+			Credential:     "expired",
+			CredentialKind: model.ThirdPartyQuotaCredentialSession,
+		},
 	}}
-	service := New(store, WithHTTPClient(server.Client()), WithUsageLimitsURL(server.URL))
+	service := New(store, WithHTTPClient(stub.client()), WithClineAPIBaseURL(stub.baseURL()))
 	_, err := service.FetchUsageLimits(context.Background(), "account-1")
 	usageError, ok := err.(*UsageError)
 	if !ok {

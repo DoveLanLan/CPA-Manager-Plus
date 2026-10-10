@@ -132,7 +132,20 @@ func TestThirdPartyQuotaMigrationPreservesLegacyClinePassAccount(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	columns := migrationTableColumns(t, db, "clinepass_accounts")
-	for _, column := range []string{"provider", "workspace_id", "server_function_id"} {
+	for _, column := range []string{
+		"provider",
+		"workspace_id",
+		"server_function_id",
+		"credential_kind",
+		"access_token",
+		"refresh_token",
+		"access_token_expires_at_ms",
+		"account_user_id",
+		"account_email",
+		"lifetime_tokens",
+		"lifetime_tokens_partial",
+		"lifetime_tokens_synced_at_ms",
+	} {
 		if !columns[column] {
 			t.Fatalf("quota account columns = %#v, missing %s", columns, column)
 		}
@@ -151,6 +164,31 @@ func TestThirdPartyQuotaMigrationPreservesLegacyClinePassAccount(t *testing.T) {
 	if provider != "clinepass" || label != "Legacy Cline" || secret != "enc:v1:fixture" || workspaceID != "" || serverFunctionID != "" {
 		t.Fatalf("migrated account = provider:%q label:%q secret:%q workspace:%q server:%q",
 			provider, label, secret, workspaceID, serverFunctionID)
+	}
+	// A row written before the credential kind existed held a browser session
+	// cookie, which is exactly what the default has to say.
+	var credentialKind, accessToken, refreshToken, accountEmail string
+	var expiresAtMS, lifetimeTokens, lifetimePartial, lifetimeSyncedAtMS int64
+	if err := db.QueryRow(`select credential_kind, access_token, refresh_token,
+		access_token_expires_at_ms, account_email, lifetime_tokens,
+		lifetime_tokens_partial, lifetime_tokens_synced_at_ms
+		from clinepass_accounts where id = 'legacy-account'`).Scan(
+		&credentialKind,
+		&accessToken,
+		&refreshToken,
+		&expiresAtMS,
+		&accountEmail,
+		&lifetimeTokens,
+		&lifetimePartial,
+		&lifetimeSyncedAtMS,
+	); err != nil {
+		t.Fatalf("read migrated credential columns: %v", err)
+	}
+	if credentialKind != "session" || accessToken != "" || refreshToken != "" ||
+		expiresAtMS != 0 || accountEmail != "" || lifetimeTokens != 0 ||
+		lifetimePartial != 0 || lifetimeSyncedAtMS != 0 {
+		t.Fatalf("legacy defaults = kind:%q access:%q refresh:%q expires:%d email:%q lifetime:%d partial:%d synced:%d",
+			credentialKind, accessToken, refreshToken, expiresAtMS, accountEmail, lifetimeTokens, lifetimePartial, lifetimeSyncedAtMS)
 	}
 }
 

@@ -31,9 +31,39 @@ func New(db *sql.DB, protector ...*security.Protector) Repository {
 	return &repository{db: db, protector: p}
 }
 
+const accountColumns = `id, provider, label, session_id, credential_kind, access_token,
+	refresh_token, access_token_expires_at_ms, account_user_id, account_email,
+	workspace_id, server_function_id, lifetime_tokens, lifetime_tokens_partial,
+	lifetime_tokens_synced_at_ms, created_at_ms, updated_at_ms`
+
+func scanAccount(scanner interface{ Scan(...any) error }) (model.ThirdPartyQuotaAccount, error) {
+	var item model.ThirdPartyQuotaAccount
+	var lifetimePartial int
+	err := scanner.Scan(
+		&item.ID,
+		&item.Provider,
+		&item.Label,
+		&item.Credential,
+		&item.CredentialKind,
+		&item.AccessToken,
+		&item.RefreshToken,
+		&item.AccessTokenExpiresAtMS,
+		&item.AccountUserID,
+		&item.AccountEmail,
+		&item.WorkspaceID,
+		&item.ServerFunctionID,
+		&item.LifetimeTokens,
+		&lifetimePartial,
+		&item.LifetimeTokensSyncedAtMS,
+		&item.CreatedAtMS,
+		&item.UpdatedAtMS,
+	)
+	item.LifetimeTokensPartial = lifetimePartial != 0
+	return item, err
+}
+
 func (r *repository) List(ctx context.Context) ([]model.ThirdPartyQuotaAccount, error) {
-	rows, err := r.db.QueryContext(ctx, `select id, provider, label, session_id, workspace_id,
-		server_function_id, created_at_ms, updated_at_ms
+	rows, err := r.db.QueryContext(ctx, `select `+accountColumns+`
 		from clinepass_accounts order by created_at_ms asc, id asc`)
 	if err != nil {
 		return nil, err
@@ -42,17 +72,8 @@ func (r *repository) List(ctx context.Context) ([]model.ThirdPartyQuotaAccount, 
 
 	items := make([]model.ThirdPartyQuotaAccount, 0)
 	for rows.Next() {
-		var item model.ThirdPartyQuotaAccount
-		if err := rows.Scan(
-			&item.ID,
-			&item.Provider,
-			&item.Label,
-			&item.Credential,
-			&item.WorkspaceID,
-			&item.ServerFunctionID,
-			&item.CreatedAtMS,
-			&item.UpdatedAtMS,
-		); err != nil {
+		item, err := scanAccount(rows)
+		if err != nil {
 			return nil, err
 		}
 		item, err = r.unprotect(item)
@@ -65,19 +86,8 @@ func (r *repository) List(ctx context.Context) ([]model.ThirdPartyQuotaAccount, 
 }
 
 func (r *repository) Get(ctx context.Context, id string) (model.ThirdPartyQuotaAccount, bool, error) {
-	var item model.ThirdPartyQuotaAccount
-	err := r.db.QueryRowContext(ctx, `select id, provider, label, session_id, workspace_id,
-		server_function_id, created_at_ms, updated_at_ms
-		from clinepass_accounts where id = ?`, id).Scan(
-		&item.ID,
-		&item.Provider,
-		&item.Label,
-		&item.Credential,
-		&item.WorkspaceID,
-		&item.ServerFunctionID,
-		&item.CreatedAtMS,
-		&item.UpdatedAtMS,
-	)
+	item, err := scanAccount(r.db.QueryRowContext(ctx, `select `+accountColumns+`
+		from clinepass_accounts where id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.ThirdPartyQuotaAccount{}, false, nil
 	}
@@ -92,31 +102,53 @@ func (r *repository) Get(ctx context.Context, id string) (model.ThirdPartyQuotaA
 }
 
 func (r *repository) Upsert(ctx context.Context, account model.ThirdPartyQuotaAccount) error {
-	if r.protector == nil {
-		return ErrSecretProtectorRequired
-	}
-	protected, err := r.protector.ProtectString(account.Credential)
+	protected, err := r.protect(account)
 	if err != nil {
 		return err
 	}
+	lifetimePartial := 0
+	if protected.LifetimeTokensPartial {
+		lifetimePartial = 1
+	}
 	_, err = r.db.ExecContext(ctx, `insert into clinepass_accounts (
-		id, provider, label, session_id, workspace_id, server_function_id, created_at_ms, updated_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?)
+		id, provider, label, session_id, credential_kind, access_token, refresh_token,
+		access_token_expires_at_ms, account_user_id, account_email, workspace_id,
+		server_function_id, lifetime_tokens, lifetime_tokens_partial,
+		lifetime_tokens_synced_at_ms, created_at_ms, updated_at_ms
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	on conflict(id) do update set
 		provider = excluded.provider,
 		label = excluded.label,
 		session_id = excluded.session_id,
+		credential_kind = excluded.credential_kind,
+		access_token = excluded.access_token,
+		refresh_token = excluded.refresh_token,
+		access_token_expires_at_ms = excluded.access_token_expires_at_ms,
+		account_user_id = excluded.account_user_id,
+		account_email = excluded.account_email,
 		workspace_id = excluded.workspace_id,
 		server_function_id = excluded.server_function_id,
+		lifetime_tokens = excluded.lifetime_tokens,
+		lifetime_tokens_partial = excluded.lifetime_tokens_partial,
+		lifetime_tokens_synced_at_ms = excluded.lifetime_tokens_synced_at_ms,
 		updated_at_ms = excluded.updated_at_ms`,
-		account.ID,
-		account.Provider,
-		account.Label,
-		protected,
-		account.WorkspaceID,
-		account.ServerFunctionID,
-		account.CreatedAtMS,
-		account.UpdatedAtMS,
+		protected.ID,
+		protected.Provider,
+		protected.Label,
+		protected.Credential,
+		protected.CredentialKind,
+		protected.AccessToken,
+		protected.RefreshToken,
+		protected.AccessTokenExpiresAtMS,
+		protected.AccountUserID,
+		protected.AccountEmail,
+		protected.WorkspaceID,
+		protected.ServerFunctionID,
+		protected.LifetimeTokens,
+		lifetimePartial,
+		protected.LifetimeTokensSyncedAtMS,
+		protected.CreatedAtMS,
+		protected.UpdatedAtMS,
 	)
 	return err
 }
@@ -130,14 +162,38 @@ func (r *repository) Delete(ctx context.Context, id string) (bool, error) {
 	return rows > 0, err
 }
 
+// protect encrypts every secret the account carries. Each column is encrypted
+// independently because a protector is free to change format per value.
+func (r *repository) protect(account model.ThirdPartyQuotaAccount) (model.ThirdPartyQuotaAccount, error) {
+	if r.protector == nil {
+		return model.ThirdPartyQuotaAccount{}, ErrSecretProtectorRequired
+	}
+	var err error
+	if account.Credential, err = r.protector.ProtectString(account.Credential); err != nil {
+		return model.ThirdPartyQuotaAccount{}, err
+	}
+	if account.AccessToken, err = r.protector.ProtectString(account.AccessToken); err != nil {
+		return model.ThirdPartyQuotaAccount{}, err
+	}
+	if account.RefreshToken, err = r.protector.ProtectString(account.RefreshToken); err != nil {
+		return model.ThirdPartyQuotaAccount{}, err
+	}
+	return account, nil
+}
+
 func (r *repository) unprotect(account model.ThirdPartyQuotaAccount) (model.ThirdPartyQuotaAccount, error) {
 	if r.protector == nil {
 		return model.ThirdPartyQuotaAccount{}, ErrSecretProtectorRequired
 	}
-	value, err := r.protector.UnprotectString(account.Credential)
-	if err != nil {
+	var err error
+	if account.Credential, err = r.protector.UnprotectString(account.Credential); err != nil {
 		return model.ThirdPartyQuotaAccount{}, err
 	}
-	account.Credential = value
+	if account.AccessToken, err = r.protector.UnprotectString(account.AccessToken); err != nil {
+		return model.ThirdPartyQuotaAccount{}, err
+	}
+	if account.RefreshToken, err = r.protector.UnprotectString(account.RefreshToken); err != nil {
+		return model.ThirdPartyQuotaAccount{}, err
+	}
 	return account, nil
 }

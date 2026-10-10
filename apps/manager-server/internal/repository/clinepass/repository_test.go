@@ -51,6 +51,63 @@ func TestRepositoryEncryptsCredentialAndRestoresProviderFields(t *testing.T) {
 	}
 }
 
+func TestRepositoryEncryptsEveryRotatingSecretAndRecordedTotal(t *testing.T) {
+	db := openTestDB(t)
+	protector, err := security.NewProtector([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("new protector: %v", err)
+	}
+	repo := New(db, protector)
+	account := model.ThirdPartyQuotaAccount{
+		ID:                       "account-rotating",
+		Provider:                 "clinepass",
+		Label:                    "Rotating",
+		Credential:               "refresh-secret",
+		CredentialKind:           "refresh_token",
+		AccessToken:              "access-secret",
+		RefreshToken:             "refresh-secret",
+		AccessTokenExpiresAtMS:   1785492000000,
+		AccountUserID:            "usr-42",
+		AccountEmail:             "user@example.test",
+		LifetimeTokens:           987654,
+		LifetimeTokensPartial:    true,
+		LifetimeTokensSyncedAtMS: 1785400000000,
+		CreatedAtMS:              10,
+		UpdatedAtMS:              20,
+	}
+	if err := repo.Upsert(context.Background(), account); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Neither rotating secret may sit in the database in the clear.
+	var rawCredential, rawAccess, rawRefresh string
+	if err := db.QueryRow(`select session_id, access_token, refresh_token
+		from clinepass_accounts where id = ?`, account.ID).Scan(
+		&rawCredential,
+		&rawAccess,
+		&rawRefresh,
+	); err != nil {
+		t.Fatalf("read raw secrets: %v", err)
+	}
+	for name, raw := range map[string]string{
+		"credential":    rawCredential,
+		"access_token":  rawAccess,
+		"refresh_token": rawRefresh,
+	} {
+		if !strings.HasPrefix(raw, "enc:v1:") || strings.Contains(raw, "secret") {
+			t.Fatalf("%s was not encrypted at rest: %q", name, raw)
+		}
+	}
+
+	loaded, ok, err := repo.Get(context.Background(), account.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !ok || loaded != account {
+		t.Fatalf("loaded account = %#v, ok=%t", loaded, ok)
+	}
+}
+
 func TestRepositoryRefusesPlaintextCredentialStorage(t *testing.T) {
 	db := openTestDB(t)
 	repo := New(db)

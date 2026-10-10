@@ -419,6 +419,23 @@ func ensureThirdPartyQuotaAccountColumns(db *sql.DB) error {
 		{name: "provider", definition: "text not null default 'clinepass'"},
 		{name: "workspace_id", definition: "text not null default ''"},
 		{name: "server_function_id", definition: "text not null default ''"},
+		// The credential kind decides how the account authenticates. Rows written
+		// before this column existed held a browser session cookie, which is what
+		// the legacy behaviour maps onto.
+		{name: "credential_kind", definition: "text not null default 'session'"},
+		// Rotating material for the credential kinds that renew themselves. Both
+		// are encrypted with the same data key as session_id.
+		{name: "access_token", definition: "text not null default ''"},
+		{name: "refresh_token", definition: "text not null default ''"},
+		{name: "access_token_expires_at_ms", definition: "integer not null default 0"},
+		// Identity of the vendor account behind the credential.
+		{name: "account_user_id", definition: "text not null default ''"},
+		{name: "account_email", definition: "text not null default ''"},
+		// Cached all-time token total, so the panel does not re-walk the vendor's
+		// usage history on every refresh.
+		{name: "lifetime_tokens", definition: "integer not null default 0"},
+		{name: "lifetime_tokens_partial", definition: "integer not null default 0"},
+		{name: "lifetime_tokens_synced_at_ms", definition: "integer not null default 0"},
 	} {
 		if _, ok := existing[column.name]; ok {
 			continue

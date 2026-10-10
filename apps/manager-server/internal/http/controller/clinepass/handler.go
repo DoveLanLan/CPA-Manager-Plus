@@ -50,7 +50,12 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 			response.MethodNotAllowed(w)
 			return
 		}
-		result, err := h.App.ThirdPartyQuotaService.FetchUsageLimits(r.Context(), id)
+		// An explicit refresh also re-walks the all-time token total; a page load
+		// reuses the recorded one.
+		options := clinepasssvc.UsageLimitsOptions{
+			ForceTokenRefresh: truthyQuery(r.URL.Query().Get("forceTokens")),
+		}
+		result, err := h.App.ThirdPartyQuotaService.FetchUsageLimitsWithOptions(r.Context(), id, options)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -137,6 +142,17 @@ func (h *Handler) handleCollection(w http.ResponseWriter, r *http.Request, legac
 		response.JSON(w, http.StatusCreated, account)
 	default:
 		response.MethodNotAllowed(w)
+	}
+}
+
+// truthyQuery reads the flag-style query values the panel sends, accepting the
+// spellings an operator might hand-write as well.
+func truthyQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -571,6 +571,142 @@
   }
 }
 
+.credentialMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -5px 0 13px 17px;
+}
+
+.credentialBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 650;
+
+  &[data-kind='api_key'] {
+    background: color-mix(in srgb, var(--success-color) 9%, var(--surface-subtle));
+    color: var(--success-color);
+  }
+
+  &[data-kind='refresh_token'] {
+    background: color-mix(in srgb, var(--primary-color) 9%, var(--surface-subtle));
+    color: var(--primary-active);
+  }
+}
+
+.credentialEmail {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentialWarning {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning-color) 10%, var(--surface-subtle));
+  color: var(--warning-color);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.tokens {
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.tokenTotals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+
+  > div {
+    min-width: 0;
+    padding: 11px 13px;
+    border: 1px solid var(--border-color);
+    border-radius: $radius-lg;
+    background: var(--surface-subtle);
+  }
+
+  span {
+    display: block;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    display: block;
+    margin-top: 5px;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 17px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.tokenMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.credentialKindField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 650;
+  }
+}
+
+.credentialNotice {
+  padding: 9px 11px;
+  border-radius: $radius-md;
+  background: color-mix(in srgb, var(--warning-color) 9%, var(--bg-primary));
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.credentialLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--primary-active);
+  font-size: 11px;
+  font-weight: 650;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
 .formError {
   padding: 10px 12px;
   border-radius: $radius-md;

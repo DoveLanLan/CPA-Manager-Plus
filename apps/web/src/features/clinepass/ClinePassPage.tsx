@@ -4,9 +4,11 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
+import { Select } from '@/components/ui/Select';
 import {
   IconCode,
   IconExternalLink,
+  IconKey,
   IconPencil,
   IconPlus,
   IconRefreshCw,
@@ -19,6 +21,7 @@ import { useInterval } from '@/hooks/useInterval';
 import {
   thirdPartyQuotaApi,
   type ThirdPartyQuotaAccount,
+  type ThirdPartyQuotaCredentialKind,
   type ThirdPartyQuotaProvider,
   type ThirdPartyQuotaUsageLimit,
   type ThirdPartyQuotaUsageLimits,
@@ -50,6 +53,10 @@ const emptyUsageState = (): AccountUsageState => ({
 const supportedLimitTypes = ['five_hour', 'weekly', 'monthly'];
 const defaultOpenCodeServerFunctionID =
   'c7389bd0e731f80f49593e5ee53835475f4e28594dd6bd83eb229bab753498cd';
+// Personal API keys are long lived, which is the fix for a browser session that
+// keeps lapsing. The documented "Settings → API Keys" path 404s for a personal
+// account, so this URL is the one that resolves.
+const clineAPIKeyURL = 'https://app.cline.bot/dashboard/account';
 
 const providerDefinitions: ProviderDefinition[] = [
   {
@@ -82,6 +89,7 @@ export function ThirdPartyQuotaPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<ThirdPartyQuotaAccount | null>(null);
   const [provider, setProvider] = useState<ThirdPartyQuotaProvider>('clinepass');
+  const [credentialKind, setCredentialKind] = useState<ThirdPartyQuotaCredentialKind | 'auto'>('auto');
   const [label, setLabel] = useState('');
   const [credential, setCredential] = useState('');
   const [workspaceId, setWorkspaceId] = useState('');
@@ -93,7 +101,7 @@ export function ThirdPartyQuotaPage() {
   useInterval(() => setClock(Date.now()), 60_000);
 
   const refreshUsage = useCallback(
-    async (accountId: string) => {
+    async (accountId: string, options?: { forceTokens?: boolean }) => {
       setUsageByAccount((current) => ({
         ...current,
         [accountId]: {
@@ -104,7 +112,7 @@ export function ThirdPartyQuotaPage() {
         },
       }));
       try {
-        const data = await thirdPartyQuotaApi.getUsageLimits(accountId);
+        const data = await thirdPartyQuotaApi.getUsageLimits(accountId, options);
         setUsageByAccount((current) => ({
           ...current,
           [accountId]: { data, loading: false, errorCode: '', errorMessage: '' },
@@ -160,6 +168,7 @@ export function ThirdPartyQuotaPage() {
   const openCreateModal = () => {
     setEditingAccount(null);
     setProvider('clinepass');
+    setCredentialKind('auto');
     setLabel('');
     setCredential('');
     setWorkspaceId('');
@@ -171,6 +180,10 @@ export function ThirdPartyQuotaPage() {
   const openEditModal = (account: ThirdPartyQuotaAccount) => {
     setEditingAccount(account);
     setProvider(account.provider);
+    // Auto-detection stays the default when swapping a credential; the stored
+    // kind is not echoed back into the picker because the value is not the
+    // operator's input.
+    setCredentialKind('auto');
     setLabel(account.label);
     setCredential('');
     setWorkspaceId(account.workspaceId ?? '');
@@ -208,10 +221,14 @@ export function ThirdPartyQuotaPage() {
     setSaving(true);
     setFormError('');
     try {
+      const credentialKindField =
+        provider === 'clinepass' && credentialKind !== 'auto' ? { credentialKind } : {};
       const account = editingAccount
         ? await thirdPartyQuotaApi.update(editingAccount.id, {
             label: normalizedLabel,
-            ...(normalizedCredential ? { credential: normalizedCredential } : {}),
+            ...(normalizedCredential
+              ? { credential: normalizedCredential, ...credentialKindField }
+              : {}),
             ...(provider === 'opencode_go'
               ? {
                   workspaceId: normalizedWorkspaceId,
@@ -224,6 +241,7 @@ export function ThirdPartyQuotaPage() {
             provider,
             label: normalizedLabel,
             credential: normalizedCredential,
+            ...credentialKindField,
             ...(provider === 'opencode_go'
               ? {
                   workspaceId: normalizedWorkspaceId,
@@ -321,6 +339,63 @@ export function ThirdPartyQuotaPage() {
     return state.errorMessage || t('clinepass.load_failed');
   };
 
+  const formatTokens = (value: number) =>
+    new Intl.NumberFormat(i18n.language).format(Math.max(0, Math.round(Number(value) || 0)));
+
+  const credentialKindOf = (account: ThirdPartyQuotaAccount): ThirdPartyQuotaCredentialKind =>
+    account.credentialKind ?? 'session';
+
+  const renderCredentialMeta = (account: ThirdPartyQuotaAccount) => {
+    if (account.provider !== 'clinepass') return null;
+    const kind = credentialKindOf(account);
+    return (
+      <div className={styles.credentialMeta}>
+        <span className={styles.credentialBadge} data-kind={kind}>
+          <IconKey size={12} />
+          {t(`clinepass.credential_kind_${kind}`)}
+        </span>
+        {account.accountEmail && <span className={styles.credentialEmail}>{account.accountEmail}</span>}
+        {(kind === 'session' || kind === 'access_token') && (
+          <span className={styles.credentialWarning}>
+            {t(`clinepass.credential_expiring_${kind}`)}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const renderTokens = (state: AccountUsageState) => {
+    const tokens = state.data?.tokens;
+    if (!tokens || (tokens.monthToDateFailed && tokens.lifetimeFailed)) return null;
+    return (
+      <div className={styles.tokens}>
+        <div className={styles.tokenTotals}>
+          <div>
+            <span>{t('clinepass.tokens_month')}</span>
+            <strong>
+              {tokens.monthToDateFailed ? '—' : formatTokens(tokens.monthToDate)}
+            </strong>
+          </div>
+          <div>
+            <span>{t('clinepass.tokens_lifetime')}</span>
+            <strong>
+              {tokens.lifetimeFailed
+                ? '—'
+                : `${tokens.lifetimePartial ? '≥ ' : ''}${formatTokens(tokens.lifetime)}`}
+            </strong>
+          </div>
+        </div>
+        <div className={styles.tokenMeta}>
+          {tokens.lifetimePartial && <span>{t('clinepass.tokens_partial')}</span>}
+          {tokens.lifetimeSyncedAtMs ? (
+            <span>{t('clinepass.tokens_synced', { time: formatAbsoluteTime(tokens.lifetimeSyncedAtMs) })}</span>
+          ) : null}
+          <span>{t('clinepass.tokens_unit')}</span>
+        </div>
+      </div>
+    );
+  };
+
   const renderLimit = (limit: ThirdPartyQuotaUsageLimit) => {
     const used = Math.max(0, Math.min(100, Number(limit.percentUsed) || 0));
     const remaining = Math.max(0, 100 - used);
@@ -387,7 +462,7 @@ export function ThirdPartyQuotaPage() {
               size="xs"
               iconOnly
               loading={state.loading}
-              onClick={() => void refreshUsage(account.id)}
+              onClick={() => void refreshUsage(account.id, { forceTokens: true })}
               aria-label={t('clinepass.refresh_account', { name: account.label })}
               title={t('clinepass.refresh_account', { name: account.label })}
             >
@@ -430,6 +505,8 @@ export function ThirdPartyQuotaPage() {
           </div>
         )}
 
+        {renderCredentialMeta(account)}
+
         {state.errorMessage ? (
           <div className={styles.usageError} role="status">
             <div>
@@ -456,6 +533,8 @@ export function ThirdPartyQuotaPage() {
         ) : (
           <div className={styles.noLimits}>{t('clinepass.no_limits')}</div>
         )}
+
+        {renderTokens(state)}
       </article>
     );
   };
@@ -618,6 +697,34 @@ export function ThirdPartyQuotaPage() {
               spellCheck={false}
             />
           )}
+          {provider === 'clinepass' && (
+            <div className={styles.credentialKindField}>
+              <label htmlFor="clinepass-credential-kind">
+                {t('clinepass.credential_kind_field')}
+              </label>
+              <Select
+                id="clinepass-credential-kind"
+                value={credentialKind}
+                ariaLabel={t('clinepass.credential_kind_field')}
+                onChange={(value) =>
+                  setCredentialKind(value as ThirdPartyQuotaCredentialKind | 'auto')
+                }
+                options={[
+                  { value: 'auto', label: t('clinepass.credential_kind_auto') },
+                  { value: 'api_key', label: t('clinepass.credential_kind_api_key') },
+                  { value: 'refresh_token', label: t('clinepass.credential_kind_refresh_token') },
+                  { value: 'access_token', label: t('clinepass.credential_kind_access_token') },
+                  { value: 'session', label: t('clinepass.credential_kind_session') },
+                ]}
+              />
+              <div className="hint">{t('clinepass.credential_kind_hint')}</div>
+              {credentialKind === 'refresh_token' && (
+                <div className={styles.credentialNotice}>
+                  {t('clinepass.credential_refresh_notice')}
+                </div>
+              )}
+            </div>
+          )}
           <Input
             label={t(`clinepass.credential_field_${provider}`)}
             value={credential}
@@ -636,6 +743,18 @@ export function ThirdPartyQuotaPage() {
             autoComplete="new-password"
             spellCheck={false}
           />
+          {provider === 'clinepass' && (
+            <a
+              className={styles.credentialLink}
+              href={clineAPIKeyURL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <IconKey size={13} />
+              {t('clinepass.credential_api_key_link')}
+              <IconExternalLink size={13} />
+            </a>
+          )}
           {provider === 'opencode_go' && (
             <Input
               label={t('clinepass.server_function_field')}

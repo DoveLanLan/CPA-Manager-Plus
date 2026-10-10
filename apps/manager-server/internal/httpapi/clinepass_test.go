@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
@@ -25,7 +26,17 @@ func TestThirdPartyQuotaClinePassAccountAndUsageManagementFlow(t *testing.T) {
 			t.Errorf("unexpected upstream cookies: %#v", r.Cookies())
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"limits":[{"type":"five_hour","percentUsed":25,"resetsAt":"2026-07-31T12:00:00Z"}]}}`))
+		switch r.URL.Path {
+		case "/api/v1/users/me/plan/usage-limits":
+			_, _ = w.Write([]byte(`{"data":{"limits":[{"type":"five_hour","percentUsed":25,"resetsAt":"2026-07-31T12:00:00Z"}]}}`))
+		case "/api/v1/users/me":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"usr-flow","email":"flow@example.test"}}`))
+		case "/api/v1/users/usr-flow/usages/daily":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"items":[{"totalTokens":1200,"promptTokens":1000,"completionTokens":200}]}}`))
+		default:
+			t.Errorf("unexpected upstream path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	t.Cleanup(upstream.Close)
 
@@ -45,7 +56,8 @@ func TestThirdPartyQuotaClinePassAccountAndUsageManagementFlow(t *testing.T) {
 	server.AppContext().ThirdPartyQuotaService = clinepasssvc.New(
 		db,
 		clinepasssvc.WithHTTPClient(upstream.Client()),
-		clinepasssvc.WithUsageLimitsURL(upstream.URL),
+		clinepasssvc.WithClineAPIBaseURL(upstream.URL+"/api/v1"),
+		clinepasssvc.WithClineLifetimeWindow(1, time.Hour),
 	)
 
 	createRequest := httptest.NewRequest(
@@ -63,11 +75,15 @@ func TestThirdPartyQuotaClinePassAccountAndUsageManagementFlow(t *testing.T) {
 		t.Fatalf("create response leaked credential: %s", createResponse.Body.String())
 	}
 	var account struct {
-		ID       string `json:"id"`
-		Provider string `json:"provider"`
+		ID             string `json:"id"`
+		Provider       string `json:"provider"`
+		CredentialKind string `json:"credentialKind"`
 	}
 	if err := json.Unmarshal(createResponse.Body.Bytes(), &account); err != nil || account.ID == "" || account.Provider != "clinepass" {
 		t.Fatalf("decode account: id=%q err=%v", account.ID, err)
+	}
+	if account.CredentialKind != "session" {
+		t.Fatalf("credential kind = %q, want session", account.CredentialKind)
 	}
 
 	usageRequest := httptest.NewRequest(
@@ -84,6 +100,11 @@ func TestThirdPartyQuotaClinePassAccountAndUsageManagementFlow(t *testing.T) {
 	if !strings.Contains(usageResponse.Body.String(), `"type":"five_hour"`) ||
 		!strings.Contains(usageResponse.Body.String(), `"percentUsed":25`) {
 		t.Fatalf("usage response = %s", usageResponse.Body.String())
+	}
+	// The token totals ride along with the quota reading.
+	if !strings.Contains(usageResponse.Body.String(), `"monthToDate":1200`) ||
+		!strings.Contains(usageResponse.Body.String(), `"lifetime":1200`) {
+		t.Fatalf("usage response is missing token totals: %s", usageResponse.Body.String())
 	}
 }
 
